@@ -32,6 +32,8 @@ The report uses three words consistently. They're this tool's terms, not vendor 
 
 Budgets are counted **per tool**: a skill shelved in Claude but pocket in Codex costs Codex's listing and not Claude's. The pocket check is deliberately broader — a skill counts as pocket if *any* tool that can see it will auto-invoke it — so the two numbers can legitimately disagree. Both print the rule they used.
 
+The pocket check compares **global-scope skills only** against your config. A repo's own skills aren't governed by a global pocket list, so they're counted and listed separately rather than reported as drift.
+
 **Symlinks** — every path is resolved and deduplicated by real target, so one folder reachable from four cupboards reports as one skill with a list of reachable-from paths. Broken symlinks are named and skipped, not fatal. If `~/.gemini/skills` and `~/.agents/skills` resolve to the same target, you get a double-link warning.
 
 ## Where it looks
@@ -59,7 +61,7 @@ A skill is any directory containing a `SKILL.md`.
 | `--config PATH` | Use a specific config file (default `~/.skill-audit.toml`) |
 | `--json` | Emit the full report as JSON instead of text |
 | `--markdown PATH` | Also write a Markdown report to that path |
-| `--quiet` | Skip inventory, budget, and pocket check. Errors, warnings, collisions, and overlaps still print. |
+| `--quiet` | Skip inventory, budget, and pocket check. Errors, warnings, notices, collisions, and overlaps still print. |
 | `--tool NAME` | Limit the scan to `claude`, `codex`, `gemini`, or `antigravity`. Repeatable. |
 | `--strict` | Treat warnings as failures |
 | `--version` | Print version and the `PATHS_VERIFIED` date |

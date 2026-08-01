@@ -154,7 +154,9 @@ skills = ["startday", "session-handoff", "brand-voice"]
 context_window = 200000
 ```
 
-Now the pocket check reports three lists instead of a bare count: correct, intended-shelf-but-actually-pocket (a missing flag), and intended-pocket-but-actually-shelf (a flag added by mistake).
+Now the pocket check reports lists instead of a bare count: correct, intended-shelf-but-actually-pocket (a missing flag), intended-pocket-but-actually-shelf (a flag added by mistake), in-config-but-not-installed (a typo or a stale entry), and project-scope pocket skills.
+
+That last list is informational. A repo's own skills aren't governed by your global pocket list, so they're counted but never reported as drift against it.
 
 ---
 

@@ -123,6 +123,68 @@ def test_collision_winner_prefers_documented_tier():
     assert codex["winner"] is None and len(codex["tied"]) == 2, codex
 
 
+def test_anchors_and_tags_are_flagged_not_stored():
+    for value in ("&ref value", "*alias", "!!str thing", "@reserved"):
+        assert sa.parse_scalar(value)[0] is False, value
+    assert sa.parse_scalar("plain value")[0] is True
+
+
+def test_findings_name_the_skill_when_there_is_no_path():
+    report = {"meta": {"version": "t", "paths_verified": "d", "locations_scanned": [],
+                       "config": "c", "config_present": False},
+              "skills": [], "collisions": [], "overlaps": [],
+              "budget": {"claude": {"total": 0, "limit": 1, "status": "pass", "pocket_skills": 0},
+                         "codex": {"total": 0, "limit": 1, "status": "pass", "pocket_skills": 0},
+                         "excluded_unknown": 0},
+              "pocket_check": {"rule": "r", "pocket_count": 0, "correct": [],
+                               "intended_shelf_but_pocket": [], "intended_pocket_but_shelf": []},
+              "recommendations": [],
+              "findings": [sa.finding("warning", "intended_shelf_pocket", "Intended shelf skill is actually pocket", "grill-me")]}
+    text = "\n".join(sa.lines_for(report))
+    assert "grill-me" in text, "a finding with no path must still name its skill"
+
+
+def test_recommendations_keep_distinct_skills_apart():
+    findings = [sa.finding("error", "missing_description", "Missing or unreadable description", "alpha", "/a"),
+                sa.finding("error", "missing_description", "Missing or unreadable description", "bravo", "/b")]
+    lines = sa.recommendations_for(findings)
+    assert len(lines) == 1, "same issue groups into one line"
+    assert "alpha" in lines[0] and "bravo" in lines[0], lines
+    assert "2 affected" in lines[0], lines
+
+
+def test_scan_findings_dedupe_by_real_path():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "source").mkdir()
+        (tmp / "source/dead").symlink_to(tmp / "nowhere")
+        (tmp / "cupA").symlink_to(tmp / "source")
+        (tmp / "cupB").symlink_to(tmp / "source")
+        findings = [sa.finding("warning", "broken_symlink", "Broken symlink", path=str(tmp / "cupA/dead")),
+                    sa.finding("warning", "broken_symlink", "Broken symlink", path=str(tmp / "cupB/dead"))]
+        assert len(sa.dedupe_scan_findings(findings)) == 1, "one dead link, reachable twice, is one problem"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_overlap_labels_disambiguate_two_copies_of_one_name():
+    shared = "alpha bravo charlie delta echo foxtrot"
+    pair = [{"name": "dup", "real_path": "/home/dup", "description": shared},
+            {"name": "dup", "real_path": "/repo/dup", "description": shared}]
+    overlaps = sa.overlap_report(pair, {}, [])
+    assert overlaps[0]["labels"] == ["/home/dup", "/repo/dup"], overlaps[0]["labels"]
+
+
+def test_project_skills_are_not_measured_against_the_global_config():
+    skills = [{"name": "global-one", "scopes": ["global"], "states": {"claude": "POCKET"}},
+              {"name": "repo-one", "scopes": ["nested"], "states": {"claude": "POCKET"}}]
+    result = sa.pocket_report(skills, {"pocket": {"skills": ["global-one"]}}, [])
+    assert result["correct"] == ["global-one"], result
+    assert result["intended_shelf_but_pocket"] == [], "a repo skill is not global drift"
+    assert result["project_pocket"] == ["repo-one"], result
+    assert result["pocket_count"] == 2, "still counted, just not compared"
+
+
 def write_skill(root: Path, name: str, body: str) -> Path:
     path = root / name
     path.mkdir(parents=True)

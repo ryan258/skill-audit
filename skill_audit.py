@@ -95,6 +95,10 @@ def parse_scalar(value: str) -> Tuple[bool, Any]:
                 return False, None
             values.append(item)
         return True, values
+    # Anchors, aliases, tags and reserved indicators are a sixth form this
+    # parser does not support. Flag them rather than storing "&ref value".
+    if value[0] in "&*!@`":
+        return False, None
     # ": " and " #" genuinely terminate a YAML plain scalar; a bare "#" does not
     # (so "C# refactoring" is valid and must not be rejected).
     if any(mark in value for mark in ("{", "}", " #", ": ")):
@@ -263,6 +267,25 @@ def scan_root(root: Path, tool: str, label: str, nested: bool = False) -> Tuple[
     return records, problems
 
 
+def dedupe_scan_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One dead link reachable from four cupboards is one problem, not four.
+
+    Skills dedupe by resolved real path; scan-level findings must too.
+    os.path.realpath is used because a broken link cannot be resolve(strict=True)'d.
+    """
+    seen, kept = set(), []
+    for item in findings:
+        key = (item["code"], os.path.realpath(item["path"]) if item["path"] else item["skill"])
+        if key in seen: continue
+        seen.add(key); kept.append(item)
+    return kept
+
+
+# Never worth walking for skills, and expensive on a monorepo.
+PRUNE_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist",
+              "build", ".next", ".tox", ".mypy_cache", ".pytest_cache", "target"}
+
+
 def project_roots(repo: Path) -> Iterable[Tuple[Path, str, bool]]:
     direct = ((repo / ".claude/skills", "claude"), (repo / ".agents/skills", "codex"),
               (repo / ".agents/skills", "gemini"), (repo / ".gemini/skills", "gemini"))
@@ -270,6 +293,7 @@ def project_roots(repo: Path) -> Iterable[Tuple[Path, str, bool]]:
     try:
         for current, dirs, _ in os.walk(repo, followlinks=False):
             current_path = Path(current)
+            dirs[:] = [d for d in dirs if d not in PRUNE_DIRS]
             if current_path == repo: continue
             for marker, tool in ((".claude", "claude"), (".agents", "codex"), (".agents", "gemini")):
                 candidate = current_path / marker / "skills"
@@ -420,11 +444,14 @@ def build_report(args: argparse.Namespace) -> Dict[str, Any]:
             entries.extend(records); findings.extend(problems)
     # Gemini double link is a root-level condition, not a per-skill issue.
     gemini_roots = [Path(os.path.expanduser(p)) for p in GLOBAL_PATHS["gemini"]]
-    if "gemini" in selected and all(p.exists() for p in gemini_roots):
+    if "gemini" in selected and len(gemini_roots) > 1 and all(p.exists() for p in gemini_roots):
         try:
             if gemini_roots[0].resolve() == gemini_roots[1].resolve():
                 findings.append(finding("warning", "double_link", "Gemini user paths resolve to the same target", path=str(gemini_roots[0])))
         except OSError: pass
+    # Everything above is scan-level; collapse duplicates before per-skill
+    # findings are appended, so one dead link is reported once.
+    findings[:] = dedupe_scan_findings(findings)
     grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for entry in entries: grouped[entry["real_path"]].append(entry)
     skills = [classify_skill(real, group, findings) for real, group in sorted(grouped.items())]
@@ -504,9 +531,16 @@ def overlap_report(skills: List[Dict[str, Any]], config: Dict[str, Any], finding
             if count <= 2 and not phrases: continue
             severity = "warning" if count >= 5 or phrases else "notice"
             if severity == "notice" and first["name"] not in owners and second["name"] not in owners: severity = "warning"
-            item = {"skills": [first["name"], second["name"]], "shared_terms": shared, "shared_term_count": count, "shared_quoted_phrases": phrases, "severity": severity}
+            # Two copies of one name are a real pair; label them by path so the
+            # output is not the useless "brand-voice / brand-voice".
+            if first["name"] == second["name"]:
+                labels = [first["real_path"], second["real_path"]]
+            else:
+                labels = [first["name"], second["name"]]
+            item = {"skills": [first["name"], second["name"]], "labels": labels, "shared_terms": shared,
+                    "shared_term_count": count, "shared_quoted_phrases": phrases, "severity": severity}
             results.append(item)
-            findings.append(finding(severity, "overlap", "These two may overlap — read them (shared terms: %d)" % count, "%s / %s" % (first["name"], second["name"])))
+            findings.append(finding(severity, "overlap", "These two may overlap — read them (shared terms: %d)" % count, "%s / %s" % (labels[0], labels[1])))
     return results
 
 
@@ -540,10 +574,19 @@ def pocket_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings
     # tool auto-invoking it is enough to cost you context and surprise you.
     # Per-tool disagreement is reported separately as mode_disagreement.
     actual = {s["name"] for s in skills if "POCKET" in s["states"].values()}
+    by_name_scopes = {s["name"]: set(s["scopes"]) for s in skills}
     rule = "a skill counts as pocket if it is POCKET in at least one tool that can see it"
     if not intended:
         if len(actual) > 5: findings.append(finding("warning", "pocket_count", "More than five pocket skills and no config is present"))
-        return {"configured": False, "rule": rule, "pocket_count": len(actual), "correct": [], "intended_shelf_but_pocket": [], "intended_pocket_but_shelf": []}
+        return {"configured": False, "rule": rule, "pocket_count": len(actual), "correct": [],
+                "intended_shelf_but_pocket": [], "intended_pocket_but_shelf": [], "project_pocket": []}
+    # A repo's own skills are not governed by a global pocket list, so comparing
+    # them against it produced false "intended shelf" hits. They are counted and
+    # listed, just not measured against the config.
+    project_pocket = sorted(name for name in actual
+                            if not {"global", "non-portable"} & set(by_name_scopes.get(name, set())))
+    actual = actual - set(project_pocket)
+    rule += "; the config comparison covers global-scope skills only"
     # A configured name with no skill on disk is a stale config or a typo, not
     # a flag added by mistake. Reporting it as the latter sends you hunting for
     # a file that is not there.
@@ -555,18 +598,32 @@ def pocket_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings
     for name in shelf_but_pocket: findings.append(finding("warning", "intended_shelf_pocket", "Intended shelf skill is actually pocket", name))
     for name in pocket_but_shelf: findings.append(finding("warning", "intended_pocket_shelf", "Intended pocket skill is not actually pocket", name))
     for name in missing: findings.append(finding("warning", "intended_missing", "Config lists a pocket skill that is not installed", name))
-    return {"configured": True, "rule": rule, "pocket_count": len(actual), "correct": correct,
+    return {"configured": True, "rule": rule, "pocket_count": len(actual) + len(project_pocket), "correct": correct,
             "intended_shelf_but_pocket": shelf_but_pocket, "intended_pocket_but_shelf": pocket_but_shelf,
-            "intended_but_not_installed": missing}
+            "intended_but_not_installed": missing, "project_pocket": project_pocket}
 
 
 def recommendations_for(findings: List[Dict[str, Any]]) -> List[str]:
+    """Group by issue, then name who is affected.
+
+    Deduping on the message alone hid distinct skills behind one line — two
+    skills missing a description reported as a single recommendation.
+    """
     rank = {"error": 0, "warning": 1, "notice": 2}
-    unique = []
-    for item in sorted(findings, key=lambda x: rank[x["severity"]]):
-        message = item["message"]
-        if message not in unique: unique.append(message)
-    return unique
+    groups: Dict[Tuple[int, str, str], List[str]] = {}
+    for item in findings:
+        key = (rank[item["severity"]], item["code"], item["message"])
+        subjects = groups.setdefault(key, [])
+        subject = item["skill"] or item["path"]
+        if subject and subject not in subjects: subjects.append(subject)
+    lines = []
+    for (_, _, message), subjects in sorted(groups.items()):
+        if not subjects:
+            lines.append(message); continue
+        shown = ", ".join(subjects[:5])
+        if len(subjects) > 5: shown += " (+%d more)" % (len(subjects) - 5)
+        lines.append("%s — %d affected: %s" % (message, len(subjects), shown))
+    return lines
 
 
 def lines_for(report: Dict[str, Any], quiet: bool = False) -> List[str]:
@@ -580,8 +637,14 @@ def lines_for(report: Dict[str, Any], quiet: bool = False) -> List[str]:
     if not quiet:
         inventory = ["%-24s %-20s %4d lines | %s | %s" % (s["name"], "/".join(s["tools"]), s["line_count"], ", ".join("%s=%s" % pair for pair in sorted(s["states"].items())), s["real_path"]) for s in skills]
         lines += section("Inventory", inventory)
-    for title, level in (("Errors", "error"), ("Warnings", "warning")):
-        values = ["[%s] %s%s" % (f["code"], f["message"], (" — " + f["path"]) if f["path"] else "") for f in findings if f["severity"] == level]
+    # A finding may carry a skill, a path, or both. Printing only the path left
+    # config-level warnings anonymous ("Intended shelf skill is actually pocket"
+    # five times, no names).
+    def subject(f: Dict[str, Any]) -> str:
+        parts = [part for part in (f["skill"], f["path"]) if part]
+        return (" — " + " @ ".join(parts)) if parts else ""
+    for title, level in (("Errors", "error"), ("Warnings", "warning"), ("Notices", "notice")):
+        values = ["[%s] %s%s" % (f["code"], f["message"], subject(f)) for f in findings if f["severity"] == level]
         lines += section(title, values)
     # --quiet skips inventory, budget, and pocket check only (brief 8b).
     # Collisions and overlaps are findings-shaped, so they survive quiet mode.
@@ -597,7 +660,7 @@ def lines_for(report: Dict[str, Any], quiet: bool = False) -> List[str]:
                 verdict = resolution["note"] or "no winner"
             collisions.append("    %-8s %s" % (tool + ":", verdict))
     lines += section("Name collisions", collisions)
-    lines += section("Overlap candidates", ["%s / %s: %d shared distinctive terms (heuristic — read both files)" % (o["skills"][0], o["skills"][1], o["shared_term_count"]) for o in report["overlaps"]])
+    lines += section("Overlap candidates", ["%s / %s: %d shared distinctive terms (heuristic — read both files)" % (o["labels"][0], o["labels"][1], o["shared_term_count"]) for o in report["overlaps"]])
     if not quiet:
         budget = report["budget"]
         lines += section("Budget", [
@@ -611,7 +674,8 @@ def lines_for(report: Dict[str, Any], quiet: bool = False) -> List[str]:
                                           "correct: %s" % ", ".join(pocket["correct"]),
                                           "intended shelf but pocket: %s" % ", ".join(pocket["intended_shelf_but_pocket"]),
                                           "intended pocket but shelf: %s" % ", ".join(pocket["intended_pocket_but_shelf"]),
-                                          "in config but not installed: %s" % ", ".join(pocket.get("intended_but_not_installed", []))])
+                                          "in config but not installed: %s" % ", ".join(pocket.get("intended_but_not_installed", [])),
+                                          "project-scope pocket (not measured against config): %s" % ", ".join(pocket.get("project_pocket", []))])
     lines += section("Recommended actions", ["%d. %s" % (i + 1, item) for i, item in enumerate(report["recommendations"])])
     lines += ["\nPath note: these paths moved recently. Re-verify quarterly; Antigravity portable-path evidence is community testing, not official documentation."]
     return lines
