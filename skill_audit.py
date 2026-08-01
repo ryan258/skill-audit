@@ -53,7 +53,8 @@ FINDING_CODES = {
     "vague_description", "late_job_noun", "oversized_body", "broken_symlink",
     "double_link", "non_portable_path", "mode_disagreement", "name_collision",
     "overlap", "budget_exceeded", "entry_cap_exceeded", "pocket_count",
-    "intended_shelf_pocket", "intended_pocket_shelf", "config_error", "unreadable",
+    "intended_shelf_pocket", "intended_pocket_shelf", "intended_missing",
+    "config_error", "unreadable",
 }
 KNOWN_FIELDS = {
     "name", "description", "allowed-tools", "disable-model-invocation", "paths",
@@ -66,6 +67,8 @@ BOOLS = {"true": True, "yes": True, "on": True, "1": True,
 
 def finding(severity: str, code: str, message: str, skill: str = "",
             path: str = "", line: Optional[int] = None) -> Dict[str, Any]:
+    assert code in FINDING_CODES, "unregistered finding code: %s" % code
+    assert severity in ("error", "warning", "notice"), severity
     suffix = "" if line is None else " (line %d)" % line
     return {"severity": severity, "code": code, "skill": skill, "path": path,
             "message": message + suffix, "line": line}
@@ -92,7 +95,9 @@ def parse_scalar(value: str) -> Tuple[bool, Any]:
                 return False, None
             values.append(item)
         return True, values
-    if any(mark in value for mark in ("{", "}", "#", ": ")):
+    # ": " and " #" genuinely terminate a YAML plain scalar; a bare "#" does not
+    # (so "C# refactoring" is valid and must not be rejected).
+    if any(mark in value for mark in ("{", "}", " #", ": ")):
         return False, None
     return True, value
 
@@ -168,8 +173,8 @@ def parse_frontmatter(text: str, nested_policy: bool = False) -> Tuple[Optional[
                 data[key] = ""
                 i += 1
                 continue
-            if nested_policy and key == "policy":
-                policy = {}
+            if nested_policy:
+                mapping = {}
                 for child, child_line in children:
                     child_match = re.match(r"^\s+([A-Za-z0-9_-]+):[ ](.*)$", child)
                     if not child_match:
@@ -179,8 +184,8 @@ def parse_frontmatter(text: str, nested_policy: bool = False) -> Tuple[Optional[
                     if not ok:
                         bad.append((child_match.group(1), child_line))
                     else:
-                        policy[child_match.group(1)] = parsed
-                data[key] = policy
+                        mapping[child_match.group(1)] = parsed
+                data[key] = mapping
             else:
                 values = []
                 for child, child_line in children:
@@ -326,7 +331,8 @@ def classify_skill(real_path: str, entries: List[Dict[str, Any]], findings: List
     parsed = parsed or {}
     for field, line in malformed:
         severity = "error" if field == "description" or "description" not in parsed else "warning"
-        findings.append(finding(severity, "unparseable_field", "Unparseable field '%s'" % field, name, real_path, line))
+        hint = " — a plain scalar cannot contain ': ' or ' #'; wrap the value in quotes" if field == "description" else ""
+        findings.append(finding(severity, "unparseable_field", "Unparseable field '%s'%s" % (field, hint), name, real_path, line))
     for field in parsed:
         if field not in KNOWN_FIELDS:
             findings.append(finding("notice", "unknown_field", "Unrecognized field '%s'" % field, name, real_path))
@@ -345,8 +351,11 @@ def classify_skill(real_path: str, entries: List[Dict[str, Any]], findings: List
             findings.append(finding("warning", "missing_trigger", "Description lacks trigger language", name, real_path))
         if is_vague(description):
             findings.append(finding("warning", "vague_description", "Description is too vague to route reliably", name, real_path))
-        if not re.search(r"\b[a-z]{4,}\b", description[:100], re.I):
-            findings.append(finding("notice", "late_job_noun", "Concrete job noun is not front-loaded", name, real_path))
+        # ponytail: a real "concrete noun" test needs POS tagging, which stdlib
+        # does not have. This checks for any distinctive (non-stopword,
+        # non-vague) term up front instead, and the message says exactly that.
+        if not description_tokens(description[:100]) - VAGUE_WORDS:
+            findings.append(finding("notice", "late_job_noun", "First 100 characters contain no distinctive term", name, real_path))
     line_count = len((text or "").splitlines())
     if line_count > 500: findings.append(finding("warning", "oversized_body", "SKILL.md exceeds 500 lines", name, real_path))
     claude_shelf = bool_value(parsed.get("disable-model-invocation")) is True
@@ -378,7 +387,9 @@ def classify_skill(real_path: str, entries: List[Dict[str, Any]], findings: List
     return {"name": name, "real_path": real_path, "file": str(skill_dir / "SKILL.md"),
             "reachable_from": sorted({entry["source"] for entry in entries}), "tools": sorted(visible),
             "states": states, "line_count": line_count, "character_count": len(text or ""),
-            "description": description, "nested": any(entry["nested"] for entry in entries)}
+            "description": description, "nested": any(entry["nested"] for entry in entries),
+            "scopes": sorted({entry["label"] for entry in entries}),
+            "occurrences": sorted({(entry["tool"], entry["label"], entry["source"]) for entry in entries})}
 
 
 def build_report(args: argparse.Namespace) -> Dict[str, Any]:
@@ -432,14 +443,52 @@ def build_report(args: argparse.Namespace) -> Dict[str, Any]:
             "budget": budget, "pocket_check": pocket, "recommendations": recommendations}
 
 
+# Documented precedence, expressed as tiers. Lower number wins.
+# "global" is a user-level install; "project"/"nested" live inside a repo.
+# Enterprise (Claude) and extension/built-in (Gemini) are not discoverable from
+# the filesystem paths this tool scans, so they never appear as a tier here.
+PRECEDENCE = {
+    "claude": {"global": (2, "personal"), "project": (3, "project"), "nested": (3, "project"),
+               "non-portable": (2, "personal")},
+    "gemini": {"project": (1, "workspace"), "nested": (1, "workspace"), "global": (2, "user"),
+               "non-portable": (2, "user")},
+}
+PRECEDENCE_TEXT = {"claude": "enterprise > personal > project",
+                   "gemini": "workspace > user > extension > built-in",
+                   "codex": "no precedence rule; both entries can appear in the picker"}
+
+
+def collision_winner(tool: str, group: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Resolve which occurrence of a duplicated name wins, for one tool."""
+    if tool == "codex":
+        return {"winner": None, "tier": None, "tied": [s["real_path"] for s in group],
+                "note": "Codex does not resolve collisions; the user picks."}
+    ranked = []
+    for skill in group:
+        if tool not in skill["tools"]: continue
+        tiers = [PRECEDENCE[tool][scope] for scope in skill["scopes"] if scope in PRECEDENCE[tool]]
+        if tiers: ranked.append((min(tiers), skill))
+    if not ranked:
+        return {"winner": None, "tier": None, "tied": [], "note": "not visible to this tool"}
+    best = min(rank for rank, _ in ranked)
+    top = [skill for rank, skill in ranked if rank == best]
+    if len(top) > 1:
+        return {"winner": None, "tier": best[1], "tied": [s["real_path"] for s in top],
+                "note": "same tier — load order decides, which is not documented"}
+    return {"winner": top[0]["real_path"], "tier": best[1], "tied": [], "note": ""}
+
+
 def collision_report(skills: List[Dict[str, Any]], findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     by_name: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for skill in skills: by_name[skill["name"]].append(skill)
     results = []
-    for name, group in by_name.items():
+    for name, group in sorted(by_name.items()):
         if len(group) < 2: continue
-        precedence = {"claude": "enterprise > personal > project", "gemini": "workspace > user > extension > built-in", "codex": "both entries can appear; no winner"}
-        results.append({"name": name, "paths": [s["real_path"] for s in group], "precedence": precedence})
+        resolution = {tool: collision_winner(tool, group) for tool in ("claude", "gemini", "codex")}
+        results.append({"name": name,
+                        "occurrences": [{"path": s["real_path"], "scopes": s["scopes"], "tools": s["tools"]} for s in group],
+                        "paths": [s["real_path"] for s in group],
+                        "resolution": resolution, "precedence": PRECEDENCE_TEXT})
         findings.append(finding("warning", "name_collision", "Multiple distinct skills share this name", name))
     return results
 
@@ -463,17 +512,20 @@ def overlap_report(skills: List[Dict[str, Any]], config: Dict[str, Any], finding
 
 def budget_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings: List[Dict[str, Any]]) -> Dict[str, Any]:
     window = int((config.get("budget") or {}).get("context_window", CONTEXT_WINDOW_DEFAULT))
-    result = {"context_window": window, "claude": {"total": 0, "limit": int(window * CLAUDE_BUDGET_FRACTION), "excluded_unknown": 0},
-              "codex": {"total": 0, "limit": min(8000, int(window * CODEX_BUDGET_FRACTION)), "excluded_unknown": 0}}
+    result = {"context_window": window, "claude": {"total": 0, "limit": int(window * CLAUDE_BUDGET_FRACTION), "pocket_skills": 0},
+              "codex": {"total": 0, "limit": min(8000, int(window * CODEX_BUDGET_FRACTION)), "pocket_skills": 0},
+              "excluded_unknown": 0}
     for skill in skills:
         chars = len(skill["name"]) + len(skill["description"])
-        has_unknown = "UNKNOWN" in skill["states"].values()
+        # Each tool's budget counts only what that tool can see. A skill being
+        # UNKNOWN in Gemini says nothing about Claude's or Codex's listing.
         for tool in ("claude", "codex"):
-            state = skill["states"].get(tool)
-            if state == "POCKET":
+            if skill["states"].get(tool) == "POCKET":
                 result[tool]["total"] += chars
-            elif has_unknown:
-                result[tool]["excluded_unknown"] += 1
+                result[tool]["pocket_skills"] += 1
+        # Excluded entirely: no tool with a readable invocation mode can see it.
+        if not {"claude", "codex"} & set(skill["states"]) and "UNKNOWN" in skill["states"].values():
+            result["excluded_unknown"] += 1
         if "claude" in skill["states"] and chars > CLAUDE_ENTRY_CAP:
             findings.append(finding("warning", "entry_cap_exceeded", "Claude listing entry exceeds %d characters" % CLAUDE_ENTRY_CAP, skill["name"], skill["real_path"]))
     for tool in ("claude", "codex"):
@@ -484,16 +536,28 @@ def budget_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings
 
 def pocket_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings: List[Dict[str, Any]]) -> Dict[str, Any]:
     intended = set((config.get("pocket") or {}).get("skills", []))
+    # The audit-wide rule: pocket in ANY tool counts as pocket, because one
+    # tool auto-invoking it is enough to cost you context and surprise you.
+    # Per-tool disagreement is reported separately as mode_disagreement.
     actual = {s["name"] for s in skills if "POCKET" in s["states"].values()}
+    rule = "a skill counts as pocket if it is POCKET in at least one tool that can see it"
     if not intended:
         if len(actual) > 5: findings.append(finding("warning", "pocket_count", "More than five pocket skills and no config is present"))
-        return {"configured": False, "pocket_count": len(actual), "correct": [], "intended_shelf_but_pocket": [], "intended_pocket_but_shelf": []}
+        return {"configured": False, "rule": rule, "pocket_count": len(actual), "correct": [], "intended_shelf_but_pocket": [], "intended_pocket_but_shelf": []}
+    # A configured name with no skill on disk is a stale config or a typo, not
+    # a flag added by mistake. Reporting it as the latter sends you hunting for
+    # a file that is not there.
+    known = {s["name"] for s in skills}
     correct = sorted(intended & actual)
     shelf_but_pocket = sorted(actual - intended)
-    pocket_but_shelf = sorted(intended - actual)
+    pocket_but_shelf = sorted((intended - actual) & known)
+    missing = sorted(intended - known)
     for name in shelf_but_pocket: findings.append(finding("warning", "intended_shelf_pocket", "Intended shelf skill is actually pocket", name))
     for name in pocket_but_shelf: findings.append(finding("warning", "intended_pocket_shelf", "Intended pocket skill is not actually pocket", name))
-    return {"configured": True, "pocket_count": len(actual), "correct": correct, "intended_shelf_but_pocket": shelf_but_pocket, "intended_pocket_but_shelf": pocket_but_shelf}
+    for name in missing: findings.append(finding("warning", "intended_missing", "Config lists a pocket skill that is not installed", name))
+    return {"configured": True, "rule": rule, "pocket_count": len(actual), "correct": correct,
+            "intended_shelf_but_pocket": shelf_but_pocket, "intended_pocket_but_shelf": pocket_but_shelf,
+            "intended_but_not_installed": missing}
 
 
 def recommendations_for(findings: List[Dict[str, Any]]) -> List[str]:
@@ -509,7 +573,7 @@ def lines_for(report: Dict[str, Any], quiet: bool = False) -> List[str]:
     meta, skills, findings = report["meta"], report["skills"], report["findings"]
     def section(title: str, lines: List[str]) -> List[str]: return ["\n" + title, "-" * len(title)] + (lines or ["none found"])
     lines = ["skill-audit %s | paths verified %s" % (meta["version"], meta["paths_verified"])]
-    summary = ["%d unique skills; %d pocket skills; %d discovered entries; %d locations scanned" % (len(skills), report["pocket_check"]["pocket_count"], sum(len(s["reachable_from"]) for s in skills), len(meta["locations_scanned"])),
+    summary = ["%d unique skills; %d pocket in at least one tool; %d discovered entries; %d locations scanned" % (len(skills), report["pocket_check"]["pocket_count"], sum(len(s["reachable_from"]) for s in skills), len(meta["locations_scanned"])),
                "config: %s" % (meta["config"] if meta["config_present"] else "not present; using defaults")]
     summary.extend("%s: %s" % (item["status"], item["path"]) for item in meta["locations_scanned"])
     lines += section("Summary", summary)
@@ -519,13 +583,35 @@ def lines_for(report: Dict[str, Any], quiet: bool = False) -> List[str]:
     for title, level in (("Errors", "error"), ("Warnings", "warning")):
         values = ["[%s] %s%s" % (f["code"], f["message"], (" — " + f["path"]) if f["path"] else "") for f in findings if f["severity"] == level]
         lines += section(title, values)
+    # --quiet skips inventory, budget, and pocket check only (brief 8b).
+    # Collisions and overlaps are findings-shaped, so they survive quiet mode.
+    collisions = []
+    for item in report["collisions"]:
+        collisions.append("%s — %d copies:" % (item["name"], len(item["occurrences"])))
+        collisions.extend("    %s [%s]" % (occurrence["path"], "/".join(occurrence["scopes"])) for occurrence in item["occurrences"])
+        for tool in ("claude", "gemini", "codex"):
+            resolution = item["resolution"][tool]
+            if resolution["winner"]:
+                verdict = "%s wins (%s tier)" % (resolution["winner"], resolution["tier"])
+            else:
+                verdict = resolution["note"] or "no winner"
+            collisions.append("    %-8s %s" % (tool + ":", verdict))
+    lines += section("Name collisions", collisions)
+    lines += section("Overlap candidates", ["%s / %s: %d shared distinctive terms (heuristic — read both files)" % (o["skills"][0], o["skills"][1], o["shared_term_count"]) for o in report["overlaps"]])
     if not quiet:
-        lines += section("Name collisions", ["%s: Claude %s; Gemini %s; Codex %s" % (c["name"], c["precedence"]["claude"], c["precedence"]["gemini"], c["precedence"]["codex"]) for c in report["collisions"]])
-        lines += section("Overlap candidates", ["%s / %s: %d shared distinctive terms (heuristic — read both files)" % (o["skills"][0], o["skills"][1], o["shared_term_count"]) for o in report["overlaps"]])
         budget = report["budget"]
-        lines += section("Budget", ["Claude: %(total)d/%(limit)d (%(status)s); %(excluded_unknown)d UNKNOWN excluded" % budget["claude"], "Codex: %(total)d/%(limit)d (%(status)s); %(excluded_unknown)d UNKNOWN excluded" % budget["codex"]])
+        lines += section("Budget", [
+            "Claude: %(total)d/%(limit)d chars across %(pocket_skills)d pocket skills (%(status)s)" % budget["claude"],
+            "Codex:  %(total)d/%(limit)d chars across %(pocket_skills)d pocket skills (%(status)s)" % budget["codex"],
+            "%d skills excluded: only Gemini/Antigravity can see them, and their mode is UNKNOWN" % budget["excluded_unknown"]])
         pocket = report["pocket_check"]
-        lines += section("Pocket check", ["pocket count: %d" % pocket["pocket_count"], "correct: %s" % ", ".join(pocket["correct"]), "intended shelf but pocket: %s" % ", ".join(pocket["intended_shelf_but_pocket"]), "intended pocket but shelf: %s" % ", ".join(pocket["intended_pocket_but_shelf"])])
+        lines += section("Pocket check", ["rule: %s" % pocket["rule"],
+                                          "(this is deliberately broader than the per-tool budgets above)",
+                                          "pocket count: %d" % pocket["pocket_count"],
+                                          "correct: %s" % ", ".join(pocket["correct"]),
+                                          "intended shelf but pocket: %s" % ", ".join(pocket["intended_shelf_but_pocket"]),
+                                          "intended pocket but shelf: %s" % ", ".join(pocket["intended_pocket_but_shelf"]),
+                                          "in config but not installed: %s" % ", ".join(pocket.get("intended_but_not_installed", []))])
     lines += section("Recommended actions", ["%d. %s" % (i + 1, item) for i, item in enumerate(report["recommendations"])])
     lines += ["\nPath note: these paths moved recently. Re-verify quarterly; Antigravity portable-path evidence is community testing, not official documentation."]
     return lines
