@@ -70,6 +70,7 @@ Three parts: **what it does**, **use when…**, **literal trigger phrases**. The
 Two syntax rules that bite:
 
 - A plain YAML scalar **cannot contain `": "` or `" #"`.** A description like `…the full build sequence: premise, bible, cast` is a genuine YAML error, not an audit quirk. Wrap the value in quotes.
+- Wrapping a long description across several indented lines **is** fine — YAML folds the continuation lines with single spaces, and the audit reads the whole thing.
 - Keep `SKILL.md` under 500 lines. Over that, move detail into supporting files next to it and reference them. The body loads when the skill fires; the description loads always.
 
 Aim for a clean Errors section before moving on. Warnings can wait.

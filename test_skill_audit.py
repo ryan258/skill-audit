@@ -40,6 +40,20 @@ def test_parses_all_five_yaml_forms():
     assert "\n" in data["when_to_use"], "literal block keeps newlines"
 
 
+def test_multiline_plain_scalar_is_folded_not_truncated():
+    """A wrapped description must survive whole; truncation poisons every check."""
+    text = ("---\nname: grill-me\n"
+            "description: Interview the user about a plan\n"
+            "    until reaching shared understanding.\n"
+            '    Use when the user wants to stress-test a plan.\n'
+            "disable-model-invocation: true\n---\n")
+    data, bad, ok = sa.parse_frontmatter(text)
+    assert not bad, bad
+    assert data["description"].endswith("stress-test a plan."), data["description"]
+    assert "Use when" in data["description"], "trigger language must not be truncated away"
+    assert data["disable-model-invocation"] == "true", "folding must stop at the next key"
+
+
 def test_flags_a_sixth_unsupported_form():
     data, bad, ok = sa.parse_frontmatter("---\nname: x\nmapping: {a: 1}\n---\n")
     assert ok and bad, "inline flow mapping must be flagged, not guessed"
@@ -185,6 +199,27 @@ def test_project_skills_are_not_measured_against_the_global_config():
     assert result["pocket_count"] == 2, "still counted, just not compared"
 
 
+def test_duplicate_names_union_their_scopes():
+    """A name that is global in one copy stays subject to the global config."""
+    skills = [{"name": "dup", "scopes": ["nested"], "states": {"claude": "POCKET"}},
+              {"name": "dup", "scopes": ["global"], "states": {"claude": "POCKET"}}]
+    result = sa.pocket_report(skills, {"pocket": {"skills": ["other"]}}, [])
+    assert result["project_pocket"] == [], "the global copy must not be lost to dict overwrite"
+    assert result["intended_shelf_but_pocket"] == ["dup"], result
+
+
+def test_quiet_names_what_it_suppressed():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo/.claude/skills").mkdir(parents=True)
+        write_skill(tmp / "repo/.claude/skills", "solo",
+                    "---\nname: solo\ndescription: Formats a script. Use when the user asks to format.\n---\n")
+        text = "\n".join(sa.lines_for(run(tmp), quiet=True))
+        assert "suppressed by --quiet" in text, "a section must never vanish without saying so"
+    finally:
+        shutil.rmtree(tmp)
+
+
 def write_skill(root: Path, name: str, body: str) -> Path:
     path = root / name
     path.mkdir(parents=True)
@@ -251,9 +286,11 @@ def test_quiet_keeps_collisions_and_changes_no_exit_code():
         quiet = sa.lines_for(report, quiet=True)
         assert any("Name collisions" in line for line in quiet), "brief 8b: quiet skips inventory/budget/pocket only"
         assert any("Overlap candidates" in line for line in quiet)
-        assert not any("Inventory" in line for line in quiet)
-        assert not any("Budget" in line for line in quiet)
-        assert any("Inventory" in line for line in loud)
+        # The section headers are gone, but the suppression is announced.
+        assert not any(line == "\nInventory" for line in quiet)
+        assert not any(line == "\nBudget" for line in quiet)
+        assert any("suppressed by --quiet" in line for line in quiet)
+        assert any(line == "\nInventory" for line in loud)
     finally:
         shutil.rmtree(tmp)
 

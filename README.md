@@ -155,4 +155,4 @@ The `PATHS_VERIFIED` date prints on every run so this is hard to forget. **Re-ve
 - `test_skill_audit.py` — self-check, no framework: `python3 test_skill_audit.py`
 - `docs/HAPPYPATH.md` — **start here**: the linear route from a pile of skill files to a `--strict`-clean library
 - `skill-setup.md` — per-tool reference: wiring each of the four tools and verifying they see your skills
-- `brief.md` — the build spec, including the YAML subset the hand-rolled frontmatter parser supports
+- `brief.md` — the build spec, including the YAML subset the hand-rolled frontmatter parser supports (plus multi-line plain scalars, which the spec omits but real skill files use)

@@ -60,7 +60,6 @@ KNOWN_FIELDS = {
     "name", "description", "allowed-tools", "disable-model-invocation", "paths",
     "when_to_use", "license", "metadata", "compatibility", "argument-hint",
 }
-BOOL_FIELDS = {"disable-model-invocation", "allow_implicit_invocation"}
 BOOLS = {"true": True, "yes": True, "on": True, "1": True,
          "false": False, "no": False, "off": False, "0": False}
 
@@ -205,6 +204,16 @@ def parse_frontmatter(text: str, nested_policy: bool = False) -> Tuple[Optional[
                 data[key] = values
             i += 1
             continue
+        # A plain scalar may continue on more-indented lines; YAML folds them
+        # with single spaces. Without this the value was silently TRUNCATED at
+        # the first newline, and every downstream check — trigger language,
+        # length, overlap tokens, budget — then ran on a partial description.
+        if value and value[0] not in "'\"[":
+            while (i + 1 < end and lines[i + 1].strip() and lines[i + 1][0].isspace()
+                   and not re.match(r"^\s+-[ ]", lines[i + 1])
+                   and not key_line.match(lines[i + 1].strip())):
+                i += 1
+                value += " " + lines[i].strip()
         ok, parsed = parse_scalar(value)
         if not ok:
             bad.append((key, line_no))
@@ -375,9 +384,9 @@ def classify_skill(real_path: str, entries: List[Dict[str, Any]], findings: List
             findings.append(finding("warning", "missing_trigger", "Description lacks trigger language", name, real_path))
         if is_vague(description):
             findings.append(finding("warning", "vague_description", "Description is too vague to route reliably", name, real_path))
-        # ponytail: a real "concrete noun" test needs POS tagging, which stdlib
-        # does not have. This checks for any distinctive (non-stopword,
-        # non-vague) term up front instead, and the message says exactly that.
+        # A real "concrete noun" test needs POS tagging, which the stdlib does
+        # not have. This checks for any distinctive (non-stopword, non-vague)
+        # term up front instead, and the message claims exactly that and no more.
         if not description_tokens(description[:100]) - VAGUE_WORDS:
             findings.append(finding("notice", "late_job_noun", "First 100 characters contain no distinctive term", name, real_path))
     line_count = len((text or "").splitlines())
@@ -474,11 +483,10 @@ def build_report(args: argparse.Namespace) -> Dict[str, Any]:
 # "global" is a user-level install; "project"/"nested" live inside a repo.
 # Enterprise (Claude) and extension/built-in (Gemini) are not discoverable from
 # the filesystem paths this tool scans, so they never appear as a tier here.
+# "non-portable" is an Antigravity-only path label, so it never appears here.
 PRECEDENCE = {
-    "claude": {"global": (2, "personal"), "project": (3, "project"), "nested": (3, "project"),
-               "non-portable": (2, "personal")},
-    "gemini": {"project": (1, "workspace"), "nested": (1, "workspace"), "global": (2, "user"),
-               "non-portable": (2, "user")},
+    "claude": {"global": (2, "personal"), "project": (3, "project"), "nested": (3, "project")},
+    "gemini": {"project": (1, "workspace"), "nested": (1, "workspace"), "global": (2, "user")},
 }
 PRECEDENCE_TEXT = {"claude": "enterprise > personal > project",
                    "gemini": "workspace > user > extension > built-in",
@@ -501,7 +509,7 @@ def collision_winner(tool: str, group: List[Dict[str, Any]]) -> Dict[str, Any]:
     top = [skill for rank, skill in ranked if rank == best]
     if len(top) > 1:
         return {"winner": None, "tier": best[1], "tied": [s["real_path"] for s in top],
-                "note": "same tier — load order decides, which is not documented"}
+                "note": "same tier — winner not determinable from documented rules"}
     return {"winner": top[0]["real_path"], "tier": best[1], "tied": [], "note": ""}
 
 
@@ -574,7 +582,11 @@ def pocket_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings
     # tool auto-invoking it is enough to cost you context and surprise you.
     # Per-tool disagreement is reported separately as mode_disagreement.
     actual = {s["name"] for s in skills if "POCKET" in s["states"].values()}
-    by_name_scopes = {s["name"]: set(s["scopes"]) for s in skills}
+    # Union the scopes: when two distinct skills share a name, a dict
+    # comprehension keeps only the last, so a name that is global in one copy
+    # and project in another could lose its global scope and escape the check.
+    by_name_scopes: Dict[str, Set[str]] = defaultdict(set)
+    for skill in skills: by_name_scopes[skill["name"]] |= set(skill["scopes"])
     rule = "a skill counts as pocket if it is POCKET in at least one tool that can see it"
     if not intended:
         if len(actual) > 5: findings.append(finding("warning", "pocket_count", "More than five pocket skills and no config is present"))
@@ -676,6 +688,10 @@ def lines_for(report: Dict[str, Any], quiet: bool = False) -> List[str]:
                                           "intended pocket but shelf: %s" % ", ".join(pocket["intended_pocket_but_shelf"]),
                                           "in config but not installed: %s" % ", ".join(pocket.get("intended_but_not_installed", [])),
                                           "project-scope pocket (not measured against config): %s" % ", ".join(pocket.get("project_pocket", []))])
+    if quiet:
+        # The brief's rule is that a section never vanishes silently, because a
+        # missing one reads as a bug. Naming the suppression keeps that true.
+        lines += ["\nInventory, Budget, Pocket check", "-" * 30, "suppressed by --quiet (exit code is unaffected)"]
     lines += section("Recommended actions", ["%d. %s" % (i + 1, item) for i, item in enumerate(report["recommendations"])])
     lines += ["\nPath note: these paths moved recently. Re-verify quarterly; Antigravity portable-path evidence is community testing, not official documentation."]
     return lines
@@ -692,7 +708,10 @@ def parser() -> argparse.ArgumentParser:
     arg.add_argument("--config", help="TOML config path (default ~/.skill-audit.toml)")
     arg.add_argument("--json", action="store_true", help="Emit full JSON report")
     arg.add_argument("--markdown", metavar="PATH", help="Also write full Markdown report to PATH")
-    arg.add_argument("--quiet", action="store_true", help="Print errors and warnings only")
+    arg.add_argument("--quiet", action="store_true",
+                     help="Suppress Inventory, Budget and Pocket check. Summary, Errors, "
+                          "Warnings, Notices, Name collisions, Overlap candidates and "
+                          "Recommended actions still print. Never changes the exit code.")
     arg.add_argument("--tool", choices=TOOLS, action="append", help="Limit scan to a tool")
     arg.add_argument("--strict", action="store_true", help="Warnings exit 1")
     arg.add_argument("--version", action="store_true", help="Print version and paths-verified date")
