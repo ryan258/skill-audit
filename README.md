@@ -44,6 +44,7 @@ Global (skipped quietly and marked "not present" if absent):
 |---|---|
 | Claude Code | `~/.claude/skills/` |
 | Codex + Gemini CLI | `~/.agents/skills/` |
+| Codex (legacy) | `~/.codex/skills/` — still scanned; holds the installs on any machine set up before the move |
 | Gemini CLI (alt) | `~/.gemini/skills/` |
 | Antigravity | `~/.gemini/config/skills/` |
 
@@ -145,7 +146,7 @@ Every section prints even when empty, with a "none found" note. A section that s
 
 ## Path instability
 
-These paths moved recently. Codex changed from `~/.codex/skills` to `.agents/skills`. Antigravity has three official docs that disagree with each other, and the evidence that `~/.gemini/config/skills/` works across all three flavors is community testing, not official documentation.
+These paths moved recently. Codex changed from `~/.codex/skills` to `.agents/skills` — both are scanned, because the old location still holds installs on any machine set up before the move, and a skill you can't see is worse than a directory that isn't there. Antigravity has three official docs that disagree with each other, and the evidence that `~/.gemini/config/skills/` works across all three flavors is community testing, not official documentation.
 
 The `PATHS_VERIFIED` date prints on every run so this is hard to forget. **Re-verify quarterly.** Paths live in the `GLOBAL_PATHS` dictionary at the top of `skill_audit.py`.
 

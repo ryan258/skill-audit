@@ -26,7 +26,10 @@ PATHS_VERIFIED = "2026-08-01"
 # Paths verified August 1, 2026. Re-verify quarterly: vendors have moved them.
 GLOBAL_PATHS = {
     "claude": ("~/.claude/skills",),
-    "codex": ("~/.agents/skills",),
+    # Codex moved to ~/.agents/skills, but the old path still holds installs on
+    # any machine set up before the move, and scanning a missing directory costs
+    # nothing. Dropping it made 26 real skills invisible on this machine.
+    "codex": ("~/.agents/skills", "~/.codex/skills"),
     "gemini": ("~/.agents/skills", "~/.gemini/skills"),
     "antigravity": ("~/.gemini/config/skills",),
 }
@@ -234,9 +237,11 @@ def safe_read(path: Path) -> Tuple[Optional[str], Optional[str]]:
         return None, str(exc)
 
 
-def paths_under(root: Path) -> Iterable[Path]:
-    if not root.exists(): return []
-    found = []
+def paths_under(root: Path) -> Tuple[List[Path], List[Path]]:
+    """Skill directories under root, plus every broken symlink met on the way."""
+    if not root.exists(): return [], []
+    found: List[Path] = []
+    broken: List[Path] = []
     try:
         for current, dirs, files in os.walk(root, followlinks=False):
             current_path = Path(current)
@@ -249,14 +254,20 @@ def paths_under(root: Path) -> Iterable[Path]:
                 candidate = current_path / directory
                 if candidate.is_symlink() and (candidate / "SKILL.md").is_file():
                     found.append(candidate)
-            # Broken directory symlinks are discovered separately by scan_root.
+            # A dangling link is not a directory, so os.walk reports it under
+            # `files`. Collecting it here is what makes depth > 1 visible: the
+            # old iterdir pass in scan_root only ever saw the root's children.
+            for name in files:
+                candidate = current_path / name
+                if candidate.is_symlink() and not candidate.exists():
+                    broken.append(candidate)
     except OSError:
         pass
-    return found
+    return found, broken
 
 
 def path_family(root: Path) -> str:
-    """Which cupboard a root belongs to: .agents, .gemini, .claude, or other.
+    """Which cupboard a root belongs to: .agents, .gemini, .claude, .codex, or other.
 
     Gemini reads both .agents/skills and .gemini/skills at the same tier, and
     resolves a same-tier tie in favour of .agents, so the family is needed to
@@ -266,7 +277,7 @@ def path_family(root: Path) -> str:
     under ~/.agents still has its own .claude/skills classified as claude.
     """
     for part in reversed(Path(root).parts):
-        if part in (".agents", ".gemini", ".claude"): return part[1:]
+        if part in (".agents", ".gemini", ".claude", ".codex"): return part[1:]
     return "other"
 
 
@@ -274,15 +285,15 @@ def scan_root(root: Path, tool: str, label: str, nested: bool = False) -> Tuple[
     records, problems = [], []
     if root.is_symlink() and not root.exists():
         return records, [finding("warning", "broken_symlink", "Broken symlink", path=str(root))]
-    try:
-        if not root.exists(): return records, []
-        for child in root.iterdir():
-            if child.is_symlink() and not child.exists():
-                problems.append(finding("warning", "broken_symlink", "Broken symlink", path=str(child)))
+    if not root.exists(): return records, []
+    try:  # paths_under swallows OSError; probe first so an unreadable root still reports.
+        os.scandir(root).close()
     except OSError as exc:
         return records, [finding("warning", "unreadable", "Cannot scan location: %s" % exc, path=str(root))]
+    skill_dirs, broken = paths_under(root)
+    problems.extend(finding("warning", "broken_symlink", "Broken symlink", path=str(p)) for p in broken)
     prec_key = "%s:%s" % (path_family(root), label)
-    for skill_dir in paths_under(root):
+    for skill_dir in skill_dirs:
         file_path = skill_dir / "SKILL.md"
         try: real = str(skill_dir.resolve(strict=True))
         except OSError:
@@ -293,15 +304,32 @@ def scan_root(root: Path, tool: str, label: str, nested: bool = False) -> Tuple[
     return records, problems
 
 
+def entry_identity(path: str) -> Any:
+    """What makes two paths the same filesystem entry, for dedupe purposes.
+
+    lstat does not follow the final component but does follow the parents, so
+    alternate routes to one link (~/.agents/skills -> ~/.claude/skills) share a
+    (device, inode) while two distinct links never do — which is exactly the
+    line between an alias and a second thing to clean up.
+    """
+    try:
+        info = os.lstat(path)
+        return (info.st_dev, info.st_ino)
+    except OSError:  # vanished mid-scan, or a path that was never on disk
+        return os.path.realpath(path)
+
+
 def dedupe_scan_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """One dead link reachable from four cupboards is one problem, not four.
 
-    Skills dedupe by resolved real path; scan-level findings must too.
-    os.path.realpath is used because a broken link cannot be resolve(strict=True)'d.
+    Coalescing is by identity of the entry itself (see entry_identity), NOT by
+    realpath: a dangling link realpaths to its missing *target*, so two separate
+    links aimed at the same absent path collapsed into one finding and the
+    second one silently never got cleaned up.
     """
     seen, kept = set(), []
     for item in findings:
-        key = (item["code"], os.path.realpath(item["path"]) if item["path"] else item["skill"])
+        key = (item["code"], entry_identity(item["path"]) if item["path"] else item["skill"])
         if key in seen: continue
         seen.add(key); kept.append(item)
     return kept

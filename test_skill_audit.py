@@ -277,6 +277,20 @@ def test_scan_findings_dedupe_by_real_path():
         shutil.rmtree(tmp)
 
 
+def test_distinct_dead_links_to_one_target_stay_distinct():
+    """The mirror of the test above: two links, one absent target, two cleanups."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "first").symlink_to(tmp / "nowhere")
+        (tmp / "second").symlink_to(tmp / "nowhere")
+        findings = [sa.finding("warning", "broken_symlink", "Broken symlink", path=str(tmp / "first")),
+                    sa.finding("warning", "broken_symlink", "Broken symlink", path=str(tmp / "second"))]
+        kept = {item["path"] for item in sa.dedupe_scan_findings(findings)}
+        assert kept == {str(tmp / "first"), str(tmp / "second")}, kept
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_overlap_labels_disambiguate_two_copies_of_one_name():
     shared = "alpha bravo charlie delta echo foxtrot"
     pair = [{"name": "dup", "real_path": "/home/dup", "description": shared},
@@ -349,6 +363,9 @@ def test_end_to_end_on_a_temp_repo():
                     "disable-model-invocation: true\n---\nbody\n")
         write_skill(skills, "bare", "no frontmatter here\n")
         (skills / "dangling").symlink_to(tmp / "nowhere")
+        # Below the root: a scan that only reads the root's own children misses it.
+        (skills / "group").mkdir()
+        (skills / "group/dangling").symlink_to(tmp / "also-nowhere")
 
         report = run(tmp)
         by_name = {s["name"]: s for s in report["skills"]}
@@ -357,6 +374,8 @@ def test_end_to_end_on_a_temp_repo():
         assert by_name["shelved"]["states"]["claude"] == "SHELF", by_name["shelved"]
         assert "no_frontmatter" in codes, codes
         assert "broken_symlink" in codes, "a dangling link must not stop the scan"
+        dead = {f["path"] for f in report["findings"] if f["code"] == "broken_symlink"}
+        assert str(skills / "group/dangling") in dead, dead
         assert "bare" in by_name, "scan continued past the broken pieces"
 
         # Every finding carries a stable, registered code and a valid severity.

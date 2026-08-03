@@ -94,7 +94,7 @@ Extension and built-in skills don't live in a scanned path, so the audit resolve
 
 ## Codex
 
-**Path:** `~/.agents/skills/` (moved from `~/.codex/skills` — if you set this up more than a few months ago, it's in the wrong place)
+**Path:** `~/.agents/skills/` (moved from `~/.codex/skills` — if you set this up more than a few months ago, your skills are in the old location. The audit scans both, so they'll show up either way.)
 
 **Wire up:**
 ```sh
