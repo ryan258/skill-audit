@@ -28,7 +28,7 @@ The report uses three words consistently. They're this tool's terms, not vendor 
 
 **Per skill** — frontmatter parses; `description` present; `name` matches the directory; description length, trigger language, vagueness, front-loading; body over 500 lines; invocation mode *per tool* (`disable-model-invocation` for Claude, `agents/openai.yaml` → `policy.allow_implicit_invocation` for Codex).
 
-**Across skills** — name collisions (every location, plus which copy actually wins under each tool's documented precedence), description overlap candidates, context-budget math, and intended-vs-actual pocket count.
+**Across skills** — name collisions (every location, plus which copy actually wins under each tool's documented precedence, plus Gemini's within-tier preference for `.agents/skills` over `.gemini/skills` — community-observed, not vendor-documented), description overlap candidates, context-budget math, and intended-vs-actual pocket count.
 
 Budgets are counted **per tool**: a skill shelved in Claude but pocket in Codex costs Codex's listing and not Claude's. The pocket check is deliberately broader — a skill counts as pocket if *any* tool that can see it will auto-invoke it — so the two numbers can legitimately disagree. Both print the rule they used.
 

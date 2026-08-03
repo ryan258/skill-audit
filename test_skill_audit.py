@@ -54,6 +54,29 @@ def test_multiline_plain_scalar_is_folded_not_truncated():
     assert data["disable-model-invocation"] == "true", "folding must stop at the next key"
 
 
+def test_trigger_heuristic_accepts_timing_based_instructions():
+    """Timing phrases are valid routing guidance, not missing triggers."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        skills = tmp / "repo/.claude/skills"
+        write_skill(skills, "before", "---\nname: before\n"
+                    "description: Prepare a story for publication. Use before publishing a story.\n---\n")
+        write_skill(skills, "after", "---\nname: after\n"
+                    "description: Check a release for regressions. Use after deploying a release.\n---\n")
+        write_skill(skills, "end", "---\nname: end\n"
+                    "description: Preserve a reusable procedure. Use at the end of a completed session.\n---\n")
+        # "use as" is deliberately NOT accepted: it matches ordinary prose
+        # ("a palette to use as inspiration") and would defeat the check.
+        write_skill(skills, "prose", "---\nname: prose\n"
+                    "description: A curated color palette to use as inspiration for mood boards.\n---\n")
+        report = run(tmp)
+        flagged = {item["skill"] for item in report["findings"] if item["code"] == "missing_trigger"}
+        assert not {"before", "after", "end"} & flagged, flagged
+        assert "prose" in flagged, flagged
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_flags_a_sixth_unsupported_form():
     data, bad, ok = sa.parse_frontmatter("---\nname: x\nmapping: {a: 1}\n---\n")
     assert ok and bad, "inline flow mapping must be flagged, not guessed"
@@ -126,15 +149,88 @@ def test_budget_is_per_tool_not_per_skill():
 
 def test_collision_winner_prefers_documented_tier():
     group = [
-        {"name": "dup", "real_path": "/home/dup", "scopes": ["global"], "tools": ["claude", "gemini"]},
-        {"name": "dup", "real_path": "/repo/dup", "scopes": ["project"], "tools": ["claude", "gemini"]},
+        {"name": "dup", "real_path": "/home/dup", "scopes": ["global"],
+         "precedence_keys": ["claude:global", "agents:global"], "tools": ["claude", "gemini"]},
+        {"name": "dup", "real_path": "/repo/dup", "scopes": ["project"],
+         "precedence_keys": ["claude:project", "agents:project"], "tools": ["claude", "gemini"]},
     ]
     claude = sa.collision_winner("claude", group)
+    # Verified against code.claude.com/docs/en/skills: "enterprise overrides
+    # personal, and personal overrides project". This is the opposite of Claude's
+    # settings precedence; the assertion guards against someone aligning them.
     assert claude["winner"] == "/home/dup", claude   # personal beats project
     gemini = sa.collision_winner("gemini", group)
     assert gemini["winner"] == "/repo/dup", gemini   # workspace beats user
     codex = sa.collision_winner("codex", group)
     assert codex["winner"] is None and len(codex["tied"]) == 2, codex
+
+
+def test_gemini_agents_path_beats_gemini_path_within_a_tier():
+    """.agents/skills is the cross-agent standard; .gemini/skills is the alias."""
+    same_tier = [
+        {"name": "dup", "real_path": "/home/gemini/dup", "scopes": ["global"],
+         "precedence_keys": ["gemini:global"], "tools": ["gemini"]},
+        {"name": "dup", "real_path": "/home/agents/dup", "scopes": ["global"],
+         "precedence_keys": ["agents:global"], "tools": ["gemini"]},
+    ]
+    result = sa.collision_winner("gemini", same_tier)
+    assert result["winner"] == "/home/agents/dup", result
+    assert result["tier"] == "user", result
+
+    project = [
+        {"name": "dup", "real_path": "/repo/gemini/dup", "scopes": ["project"],
+         "precedence_keys": ["gemini:project"], "tools": ["gemini"]},
+        {"name": "dup", "real_path": "/repo/agents/dup", "scopes": ["project"],
+         "precedence_keys": ["agents:project"], "tools": ["gemini"]},
+    ]
+    assert sa.collision_winner("gemini", project)["winner"] == "/repo/agents/dup"
+
+    # And a workspace copy still beats any user copy, whichever family it is in.
+    across = [same_tier[1], project[0]]
+    assert sa.collision_winner("gemini", across)["winner"] == "/repo/gemini/dup"
+
+
+def test_path_family_identifies_the_cupboard():
+    assert sa.path_family(Path("/Users/x/.agents/skills")) == "agents"
+    assert sa.path_family(Path("/Users/x/.gemini/skills")) == "gemini"
+    assert sa.path_family(Path("/Users/x/.gemini/config/skills")) == "gemini"
+    assert sa.path_family(Path("/Users/x/.claude/skills")) == "claude"
+    assert sa.path_family(Path("/repo/.agents/skills")) == "agents"
+    # Nearest marker wins: a repo living under ~/.agents or ~/.gemini must not
+    # drag its own .claude/skills into the wrong family, which would make a real
+    # collision report "precedence not determinable".
+    assert sa.path_family(Path("/Users/x/.agents/myrepo/.claude/skills")) == "claude"
+    assert sa.path_family(Path("/Users/x/.gemini/ext/e/.claude/skills")) == "claude"
+    assert sa.path_family(Path("/Users/x/.claude/plugins/p/.agents/skills")) == "agents"
+    assert sa.path_family(Path("/repo/no/markers/here")) == "other"
+
+
+def test_unmatched_precedence_key_returns_undeterminable():
+    group = [
+        {"name": "dup", "real_path": "/home/dup", "scopes": ["global"],
+         "precedence_keys": ["other:global"], "tools": ["claude"]},
+        {"name": "dup", "real_path": "/repo/dup", "scopes": ["project"],
+         "precedence_keys": ["claude:project"], "tools": ["claude"]},
+    ]
+    claude = sa.collision_winner("claude", group)
+    assert claude["winner"] is None, claude
+    assert claude["note"] == "unrecognized skill root — precedence not determinable", claude
+
+
+def test_nested_gemini_skills_discovered_and_ranked():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        sub_gemini = tmp / "repo/sub/.gemini/skills"
+        write_skill(sub_gemini, "nested-gem", "---\nname: nested-gem\ndescription: Formats a script. Use when the user asks to format.\n---\n")
+        roots = list(sa.project_roots(tmp / "repo"))
+        found = [(p, tool, nested) for p, tool, nested in roots if "sub/.gemini/skills" in str(p)]
+        assert len(found) == 1, roots
+        p, tool, nested = found[0]
+        assert tool == "gemini" and nested is True
+        records, _ = sa.scan_root(p, tool, "nested", nested=nested)
+        assert records[0]["precedence_key"] == "gemini:nested"
+    finally:
+        shutil.rmtree(tmp)
 
 
 def test_anchors_and_tags_are_flagged_not_stored():

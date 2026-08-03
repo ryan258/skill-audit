@@ -73,6 +73,21 @@ This is the most useful verification command of any of the four tools. It prints
 
 **Watch for the double link.** If both `~/.agents/skills/` and `~/.gemini/skills/` resolve to the same target, Gemini reads both as user scope and the same skill lands in the same tier twice. The audit flags this as `double_link`.
 
+**Precedence, highest first.** Gemini resolves duplicates across four scanned tiers:
+
+| Priority | Tier | Path |
+|---|---|---|
+| 1† | Workspace | `<repo>/.agents/skills/` |
+| 2 | Workspace | `<repo>/.gemini/skills/` |
+| 3† | User | `~/.agents/skills/` |
+| 4 | User | `~/.gemini/skills/` |
+| 5 | Extension | bundled extension paths |
+| 6 | Built-in | CLI built-ins |
+
+*† The four main tiers (Workspace > User > Extension > Built-in) are official Gemini CLI precedence rules; the within-tier `.agents/skills/` > `.gemini/skills/` preference (rows 1 vs 2, 3 vs 4) is observed via community testing rather than official documentation.*
+
+Extension and built-in skills don't live in a scanned path, so the audit resolves the top four and names the winner per tool. Pick one home for a skill anyway — relying on precedence to break a tie you created is how you end up editing the copy that never loads.
+
 **Folder trust:** `gemini skills list` will print `Skipping project agents due to untrusted folder` when run in an untrusted directory. Project-scope skills silently don't load until you trust the folder — this looks exactly like a broken skill.
 
 ---

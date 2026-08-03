@@ -65,7 +65,7 @@ description: Generate on-brand content for X and LinkedIn using a locked
   or bio copy. Triggers include "write a post", "draft a hook", "X thread".
 ```
 
-Three parts: **what it does**, **use when…**, **literal trigger phrases**. The audit checks for all three indirectly — `thin_description` (under 40 chars), `missing_trigger` (no "use when" / "trigger" / "when the user"), `vague_description` (nothing but broad words), `late_job_noun` (no distinctive term in the first 100 characters).
+Three parts: **what it does**, **routing guidance**, **literal trigger phrases**. The audit accepts `use when`, `use before`, `use after`, `use at the start/end of`, `trigger`, `when the user`, or `for … requests` as routing guidance. (`use as` is not accepted — it matches ordinary prose like "a palette to use as inspiration".) It checks the rest indirectly — `thin_description` (under 40 chars), `missing_trigger`, `vague_description` (nothing but broad words), and `late_job_noun` (no distinctive term in the first 100 characters).
 
 Two syntax rules that bite:
 

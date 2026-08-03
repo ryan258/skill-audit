@@ -255,6 +255,21 @@ def paths_under(root: Path) -> Iterable[Path]:
     return found
 
 
+def path_family(root: Path) -> str:
+    """Which cupboard a root belongs to: .agents, .gemini, .claude, or other.
+
+    Gemini reads both .agents/skills and .gemini/skills at the same tier, and
+    resolves a same-tier tie in favour of .agents, so the family is needed to
+    tell those two apart.
+
+    Walks from the leaf so the *nearest* marker wins: a repo that happens to sit
+    under ~/.agents still has its own .claude/skills classified as claude.
+    """
+    for part in reversed(Path(root).parts):
+        if part in (".agents", ".gemini", ".claude"): return part[1:]
+    return "other"
+
+
 def scan_root(root: Path, tool: str, label: str, nested: bool = False) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     records, problems = [], []
     if root.is_symlink() and not root.exists():
@@ -266,13 +281,15 @@ def scan_root(root: Path, tool: str, label: str, nested: bool = False) -> Tuple[
                 problems.append(finding("warning", "broken_symlink", "Broken symlink", path=str(child)))
     except OSError as exc:
         return records, [finding("warning", "unreadable", "Cannot scan location: %s" % exc, path=str(root))]
+    prec_key = "%s:%s" % (path_family(root), label)
     for skill_dir in paths_under(root):
         file_path = skill_dir / "SKILL.md"
         try: real = str(skill_dir.resolve(strict=True))
         except OSError:
             problems.append(finding("warning", "broken_symlink", "Broken skill path", path=str(skill_dir))); continue
         records.append({"source": str(skill_dir), "real_path": real, "file": str(file_path),
-                        "tool": tool, "label": label, "nested": nested})
+                        "tool": tool, "label": label, "nested": nested,
+                        "precedence_key": prec_key})
     return records, problems
 
 
@@ -304,7 +321,7 @@ def project_roots(repo: Path) -> Iterable[Tuple[Path, str, bool]]:
             current_path = Path(current)
             dirs[:] = [d for d in dirs if d not in PRUNE_DIRS]
             if current_path == repo: continue
-            for marker, tool in ((".claude", "claude"), (".agents", "codex"), (".agents", "gemini")):
+            for marker, tool in ((".claude", "claude"), (".agents", "codex"), (".agents", "gemini"), (".gemini", "gemini")):
                 candidate = current_path / marker / "skills"
                 if candidate.exists():
                     yield candidate, tool, True
@@ -380,7 +397,7 @@ def classify_skill(real_path: str, entries: List[Dict[str, Any]], findings: List
     if description:
         if len(description) < 40: findings.append(finding("warning", "thin_description", "Description is under 40 characters", name, real_path))
         if len(description) > 500: findings.append(finding("warning", "bloated_description", "Description exceeds 500 characters", name, real_path))
-        if not re.search(r"\b(use when|trigger|when (the )?user|for .* requests?)\b", description, re.I):
+        if not re.search(r"\b(use (?:when|before|after|at the (?:start|end) of)|trigger|when (the )?user|for .* requests?)\b", description, re.I):
             findings.append(finding("warning", "missing_trigger", "Description lacks trigger language", name, real_path))
         if is_vague(description):
             findings.append(finding("warning", "vague_description", "Description is too vague to route reliably", name, real_path))
@@ -422,6 +439,7 @@ def classify_skill(real_path: str, entries: List[Dict[str, Any]], findings: List
             "states": states, "line_count": line_count, "character_count": len(text or ""),
             "description": description, "nested": any(entry["nested"] for entry in entries),
             "scopes": sorted({entry["label"] for entry in entries}),
+            "precedence_keys": sorted({entry["precedence_key"] for entry in entries}),
             "occurrences": sorted({(entry["tool"], entry["label"], entry["source"]) for entry in entries})}
 
 
@@ -483,10 +501,30 @@ def build_report(args: argparse.Namespace) -> Dict[str, Any]:
 # "global" is a user-level install; "project"/"nested" live inside a repo.
 # Enterprise (Claude) and extension/built-in (Gemini) are not discoverable from
 # the filesystem paths this tool scans, so they never appear as a tier here.
-# "non-portable" is an Antigravity-only path label, so it never appears here.
+# Keys are "<cupboard family>:<scope>". Lower rank wins.
+#
+# Claude: enterprise > personal > project. Enterprise is not filesystem-visible
+# from the paths scanned here, so rank 1 is unused.
+# Verified 2026-08-03 against code.claude.com/docs/en/skills: "When skills share
+# the same name across levels, enterprise overrides personal, and personal
+# overrides project." Note this is the OPPOSITE of Claude's *settings*
+# precedence (where project beats user) — do not "fix" it to match settings.
+# Plugin skills are namespaced plugin-name:skill-name and cannot collide, so
+# they need no rank. Docs do not state nested-vs-project ordering, so both hold
+# rank 3 and a nested/project pair correctly reports as an undeterminable tie.
+#
+# Gemini: workspace > user > extension > built-in (documented rules).
+# WITHIN a tier, .agents/skills beats .gemini/skills (observed via community
+# testing; .agents is the cross-agent standard path and .gemini is the vendor
+# alias). Extension and built-in skills do not live in a scanned path, so they
+# never rank here.
+# "non-portable" is an Antigravity-only label and never reaches these tables.
 PRECEDENCE = {
-    "claude": {"global": (2, "personal"), "project": (3, "project"), "nested": (3, "project")},
-    "gemini": {"project": (1, "workspace"), "nested": (1, "workspace"), "global": (2, "user")},
+    "claude": {"claude:global": (2, "personal"),
+               "claude:project": (3, "project"), "claude:nested": (3, "project")},
+    "gemini": {"agents:project": (1, "workspace"), "agents:nested": (1, "workspace"),
+               "gemini:project": (2, "workspace"), "gemini:nested": (2, "workspace"),
+               "agents:global": (3, "user"), "gemini:global": (4, "user")},
 }
 PRECEDENCE_TEXT = {"claude": "enterprise > personal > project",
                    "gemini": "workspace > user > extension > built-in",
@@ -501,7 +539,14 @@ def collision_winner(tool: str, group: List[Dict[str, Any]]) -> Dict[str, Any]:
     ranked = []
     for skill in group:
         if tool not in skill["tools"]: continue
-        tiers = [PRECEDENCE[tool][scope] for scope in skill["scopes"] if scope in PRECEDENCE[tool]]
+        tiers = [PRECEDENCE[tool][key] for key in skill["precedence_keys"] if key in PRECEDENCE[tool]]
+        # Defensive assertion, not a normal path: every root the scanner yields
+        # carries a .claude/.agents/.gemini marker, so path_family always returns
+        # a known family. This catches a future root added without a PRECEDENCE
+        # entry, and refuses to guess rather than reporting a wrong winner.
+        if not tiers and any(k.endswith((":global", ":project", ":nested")) for k in skill["precedence_keys"]):
+            return {"winner": None, "tier": None, "tied": [s["real_path"] for s in group],
+                    "note": "unrecognized skill root — precedence not determinable"}
         if tiers: ranked.append((min(tiers), skill))
     if not ranked:
         return {"winner": None, "tier": None, "tied": [], "note": "not visible to this tool"}
@@ -521,7 +566,8 @@ def collision_report(skills: List[Dict[str, Any]], findings: List[Dict[str, Any]
         if len(group) < 2: continue
         resolution = {tool: collision_winner(tool, group) for tool in ("claude", "gemini", "codex")}
         results.append({"name": name,
-                        "occurrences": [{"path": s["real_path"], "scopes": s["scopes"], "tools": s["tools"]} for s in group],
+                        "occurrences": [{"path": s["real_path"], "scopes": s["scopes"],
+                                         "precedence_keys": s["precedence_keys"], "tools": s["tools"]} for s in group],
                         "paths": [s["real_path"] for s in group],
                         "resolution": resolution, "precedence": PRECEDENCE_TEXT})
         findings.append(finding("warning", "name_collision", "Multiple distinct skills share this name", name))
@@ -663,7 +709,10 @@ def lines_for(report: Dict[str, Any], quiet: bool = False) -> List[str]:
     collisions = []
     for item in report["collisions"]:
         collisions.append("%s — %d copies:" % (item["name"], len(item["occurrences"])))
-        collisions.extend("    %s [%s]" % (occurrence["path"], "/".join(occurrence["scopes"])) for occurrence in item["occurrences"])
+        # Print precedence keys, not scopes: two copies can share a scope and
+        # still resolve differently (Gemini's .agents-over-.gemini preference),
+        # and "[global] / [global]" cannot explain the winner below.
+        collisions.extend("    %s [%s]" % (occurrence["path"], "/".join(occurrence["precedence_keys"])) for occurrence in item["occurrences"])
         for tool in ("claude", "gemini", "codex"):
             resolution = item["resolution"][tool]
             if resolution["winner"]:
