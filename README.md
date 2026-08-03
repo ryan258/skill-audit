@@ -1,6 +1,6 @@
 # skill-audit
 
-A read-only CLI that finds every `SKILL.md` on your Mac and tells you what's wrong with your agent skill library — across Claude Code, Codex, Gemini CLI, and Antigravity.
+A read-only CLI that finds every `SKILL.md` on your Mac and tells you what's wrong with your agent skill library — across [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview), [Codex](https://openai.com), [Gemini CLI](https://gemini.google.com), and [Antigravity](https://antigravity.google).
 
 It never modifies a skill file. The only path it can write to is the one you pass to `--markdown`.
 
@@ -42,11 +42,11 @@ Global (skipped quietly and marked "not present" if absent):
 
 | Tool | Path |
 |---|---|
-| Claude Code | `~/.claude/skills/` |
-| Codex + Gemini CLI | `~/.agents/skills/` |
-| Codex (legacy) | `~/.codex/skills/` — still scanned; holds the installs on any machine set up before the move |
-| Gemini CLI (alt) | `~/.gemini/skills/` |
-| Antigravity | `~/.gemini/config/skills/` |
+| [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) | `~/.claude/skills/` |
+| [Codex](https://openai.com) + [Gemini CLI](https://gemini.google.com) | `~/.agents/skills/` |
+| [Codex](https://openai.com) (legacy) | `~/.codex/skills/` — still scanned; holds the installs on any machine set up before the move |
+| [Gemini CLI](https://gemini.google.com) (alt) | `~/.gemini/skills/` |
+| [Antigravity](https://antigravity.google) | `~/.gemini/config/skills/` |
 
 `~/.gemini/antigravity/skills/` and `~/.gemini/antigravity-cli/skills/` are also scanned and flagged **non-portable** — only `~/.gemini/config/skills/` is confirmed to work across all three Antigravity flavors.
 

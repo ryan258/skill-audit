@@ -1,6 +1,6 @@
 # ELI5: skill-audit
 
-Imagine you have a team of **AI helpers** (like Claude, Codex, Gemini, and Antigravity) and a giant box of **instruction booklets** (called "skills") that teach them special tricks—like writing code, checking grammar, or drawing maps.
+Imagine you have a team of **AI helpers** (like [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview), [Codex](https://openai.com), [Gemini CLI](https://gemini.google.com), and [Antigravity](https://antigravity.google)) and a giant box of **instruction booklets** (called "skills") that teach them special tricks—like writing code, checking grammar, or drawing maps.
 
 `skill-audit` is like a **smart librarian** for those booklets. Here is what it does:
 

@@ -7,10 +7,10 @@ agent will select a skill for every matching prompt.
 
 | Surface | Location | Current state |
 |---|---|---|
-| Claude Code | `~/.claude/skills/` | 27 filesystem entries, including the linked `pkos-ingest`; 26 shared skills were verified live before it was added. |
-| Codex | `~/.codex/skills/` plus the shared skill path | Reads `pkos-ingest` directly from its canonical location; the 26 existing shared skills were verified live. Claude/Codex shelf policies match. |
-| Gemini CLI | `~/.agents/skills/` → `~/.claude/skills/` | The shared `pkos-ingest` link resolves here; re-run `gemini skills list --all` after a Gemini restart to refresh its inventory. |
-| Antigravity / Antigravity IDE | `~/.gemini/config/skills/` → `~/.agents/skills/` | The shared `pkos-ingest` link resolves on the configured path. Its activation mode is undocumented, so it remains `UNKNOWN`. |
+| [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) | `~/.claude/skills/` | 27 filesystem entries, including the linked `pkos-ingest` ([PKOS](https://github.com/ryan258/PKos)); 26 shared skills were verified live before it was added. |
+| [Codex](https://openai.com) | `~/.codex/skills/` plus the shared skill path | Reads `pkos-ingest` directly from its canonical location; the 26 existing shared skills were verified live. Claude/Codex shelf policies match. |
+| [Gemini CLI](https://gemini.google.com) | `~/.agents/skills/` → `~/.claude/skills/` | The shared `pkos-ingest` link resolves here; re-run `gemini skills list --all` after a Gemini restart to refresh its inventory. |
+| [Antigravity](https://antigravity.google) / Antigravity IDE | `~/.gemini/config/skills/` → `~/.agents/skills/` | The shared `pkos-ingest` link resolves on the configured path. Its activation mode is undocumented, so it remains `UNKNOWN`. |
 | Claude Desktop Chat/Cowork plugins | Account-level Claude plugin directory | No Claude plugins installed as of this snapshot; this is separate from the local skill library. |
 
 The personal source of truth is `~/.skills/`. Claude-only packaged skills live
