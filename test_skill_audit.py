@@ -299,6 +299,27 @@ def test_overlap_labels_disambiguate_two_copies_of_one_name():
     assert overlaps[0]["labels"] == ["/home/dup", "/repo/dup"], overlaps[0]["labels"]
 
 
+def test_wrong_shaped_config_is_dropped_not_fatal():
+    # Valid TOML, wrong schema. Every one of these used to raise out of the run
+    # and exit 3 instead of producing a finding.
+    for bad in ({"overlap": {"suppress": 7}}, {"pocket": {"skills": 5}},
+                {"budget": {"context_window": "nope"}}, {"budget": {"context_window": True}},
+                {"budget": {"context_window": -5}}, {"ownership": ["x"]}, {"overlap": "nope"},
+                "not a table"):
+        clean, problems = sa.validated_config(bad)
+        assert problems, "wrong-shaped config must be reported: %r" % (bad,)
+        sa.overlap_report([], clean, [])
+        sa.budget_report([], clean, [])
+        sa.pocket_report([], clean, [])
+
+    good = {"pocket": {"skills": ["a"]}, "ownership": {"job": "a"},
+            "overlap": {"suppress": ["a / b"]}, "budget": {"context_window": 300000},
+            "unknown-section": {"left": "alone"}}
+    clean, problems = sa.validated_config(good)
+    assert not problems, problems
+    assert clean == good, clean
+
+
 def test_overlap_suppression():
     shared = "alpha bravo charlie delta echo foxtrot"
     named = [{"name": "a", "real_path": "/x/a", "description": shared},

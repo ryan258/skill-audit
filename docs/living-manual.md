@@ -292,6 +292,13 @@ suppress = ["idea-refine / interview-me", "interview-me / grill-me"]
 context_window = 200000
 ```
 
+A missing configuration file is normal and the audit says so. A file that parses
+but holds a wrongly-shaped value — a scalar where a list belongs, a string
+`context_window` — has that value ignored with a `config_error` warning, and the
+rest of the run continues on defaults. Configuration is never a reason for a
+read-only audit to abort. Sections the tool does not document are left alone
+rather than reported.
+
 The pocket list is an intent record for global-scope skills. With no list, the
 audit only counts POCKET skills and warns when the total exceeds five. With a
 list, it compares installed global skills against intent:
@@ -444,7 +451,7 @@ on `code`, not message wording.
 | `intended_pocket_shelf` | A declared pocket skill is not pocket. |
 | `intended_missing` | The configured intent names no installed skill. |
 | `suppress_unmatched` | An `overlap.suppress` entry matched no detected pair. |
-| `config_error` | The TOML configuration could not be parsed. |
+| `config_error` | The TOML configuration could not be parsed, or a value in it is the wrong shape and was ignored. |
 
 ### Notices
 

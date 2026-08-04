@@ -88,7 +88,7 @@ Warnings alone don't fail the run. A thin description or a possible overlap is s
 
 ## Config (optional)
 
-`~/.skill-audit.toml`, or `--config`. Missing is fine — the tool runs on defaults and says so.
+`~/.skill-audit.toml`, or `--config`. Missing is fine — the tool runs on defaults and says so. So is malformed: a value of the wrong shape is ignored with a `config_error` warning and the run continues, because a config file should never be able to abort a read-only audit.
 
 ```toml
 [pocket]

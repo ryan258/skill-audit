@@ -69,6 +69,14 @@ KNOWN_FIELDS = {
 CODEX_NESTED_BLOCKS = ("dependencies", "interface", "tools")
 # Overlap labels are joined with this, and config pair entries are split on it.
 PAIR_SEPARATOR = " / "
+# The documented config shape. A section mapped to None is a free-form table of
+# string -> string; anything not listed here is ignored rather than validated.
+CONFIG_SHAPE = {
+    "pocket": {"skills": list},
+    "ownership": None,
+    "overlap": {"suppress": list},
+    "budget": {"context_window": int},
+}
 BOOLS = {"true": True, "yes": True, "on": True, "1": True,
          "false": False, "no": False, "off": False, "0": False}
 
@@ -388,6 +396,44 @@ def parse_config(path: Path) -> Tuple[Dict[str, Any], Optional[str]]:
         return {}, str(exc)
 
 
+def validated_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+    """Drop config values that parse as TOML but are the wrong shape.
+
+    Every consumer of this dictionary indexes, iterates, or coerces it. Valid
+    TOML with a scalar where a list belongs used to raise out of the run and
+    exit 3 — the one outcome a read-only audit must never produce. Unknown
+    sections pass through untouched: this validates the documented shape, it
+    does not police the file.
+    """
+    if not isinstance(config, dict): return {}, ["top level is not a table"]
+    clean, problems = {}, []
+    for section, value in config.items():
+        if section not in CONFIG_SHAPE:
+            clean[section] = value
+            continue
+        if not isinstance(value, dict):
+            problems.append("[%s] is not a table" % section)
+            continue
+        fields = CONFIG_SHAPE[section]
+        if fields is None:  # ownership: a free-form table of string -> string
+            clean[section] = {key: val for key, val in value.items() if isinstance(val, str)}
+            problems += ["[%s] %s is not a string" % (section, key) for key in sorted(set(value) - set(clean[section]))]
+            continue
+        kept = {}
+        for key, val in value.items():
+            expected = fields.get(key)
+            if expected is None: kept[key] = val
+            elif expected is list:
+                if isinstance(val, list) and all(isinstance(item, str) for item in val): kept[key] = val
+                else: problems.append("[%s] %s must be a list of strings" % (section, key))
+            # bool is an int subclass, and `context_window = true` would quietly
+            # become a one-character budget.
+            elif isinstance(val, int) and not isinstance(val, bool) and val > 0: kept[key] = val
+            else: problems.append("[%s] %s must be a positive integer" % (section, key))
+        clean[section] = kept
+    return clean, problems
+
+
 def description_tokens(description: str) -> Set[str]:
     return {word for word in re.split(r"\W+", description.lower())
             if len(word) >= 4 and word not in STOPWORDS}
@@ -520,6 +566,9 @@ def build_report(args: argparse.Namespace) -> Dict[str, Any]:
     config_path = Path(args.config).expanduser() if args.config else home / ".skill-audit.toml"
     config, config_error = parse_config(config_path)
     if config_error: findings.append(finding("warning", "config_error", "Cannot parse config: %s" % config_error, path=str(config_path)))
+    config, config_problems = validated_config(config)
+    for problem in config_problems:
+        findings.append(finding("warning", "config_error", "Ignoring malformed config value: %s" % problem, path=str(config_path)))
     collisions = collision_report(skills, findings)
     overlaps = overlap_report(skills, config, findings)
     budget = budget_report(skills, config, findings)
