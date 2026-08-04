@@ -1,6 +1,6 @@
 # Exemplar: a skill that passes `--strict`
 
-`dos-and-donts.md` is the failure catalogue. This is the opposite: one complete
+`../dos-and-donts.md` is the failure catalogue. This is the opposite: one complete
 skill, written correctly, with the reasoning in the margin. Copy it and replace
 the domain.
 
@@ -151,12 +151,13 @@ python3 skill_audit.py --strict
 
 Clean means discoverable, parseable, and within budget. It does not mean the
 agent will pick this skill on a given prompt — nothing here can tell you that.
-That's an eval. See the closing section of `dos-and-donts.md`.
+That's an eval. See the closing section of `../dos-and-donts.md`.
 
 ---
 
 ## Related
 
-- `dos-and-donts.md` — every rule above, stated as the finding you get when you break it
-- `HAPPYPATH.md` — the once-through sequence for a whole library
-- `../skill-setup.md` — per-tool wiring and how to confirm each tool sees it
+- `../dos-and-donts.md` — every rule above, stated as the finding you get when you break it
+- `../HAPPYPATH.md` — the once-through sequence for a whole library
+- `../library-model.md` — canonical copy, tool discovery, and invocation mode in one page
+- `../../skill-setup.md` — per-tool wiring and how to confirm each tool sees it

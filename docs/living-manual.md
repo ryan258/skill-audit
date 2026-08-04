@@ -584,8 +584,16 @@ audit lacks a documented state signal, not that a skill cannot be used.
 ## Related documents
 
 - [README.md](../README.md) — compact install, command, and output reference.
+- [library-model.md](library-model.md) — the orientation model: canonical copy,
+  discovery, invocation mode.
 - [HAPPYPATH.md](HAPPYPATH.md) — a practical sequence for repairing a library.
 - [dos-and-donts.md](dos-and-donts.md) — finding-by-finding remediation guide.
+- [exemplars/skill-example.md](exemplars/skill-example.md) — one verified-clean
+  skill, annotated line by line.
+- Authoring assistants, paste-ready:
+  [Claude Project](claude-project-skill-instructions.md),
+  [Custom GPT](custom-openai-gpt-skill-instructions.md),
+  [Gemini Gem](custom-gemini-skill-instructions.md).
 - [OVERLAP-REVIEW.md](OVERLAP-REVIEW.md) — a dated review queue for the current
   live library; it is not a general rulebook.
 - [skill-wiki.md](skill-wiki.md) — dated inventory and routing notes for the

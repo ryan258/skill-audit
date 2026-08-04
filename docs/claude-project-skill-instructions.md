@@ -5,7 +5,7 @@ into the project's **Custom instructions**, and upload these three files to
 **Project knowledge**:
 
 - `docs/dos-and-donts.md` — the finding codes the output has to survive
-- `docs/exemplars/skill-example-[ai].md` — one verified-clean skill, annotated
+- `docs/exemplars/skill-example.md` — one verified-clean skill, annotated
 - `docs/library-model.md` — source of truth, discovery, invocation mode
 
 The instructions assume those files are attached. Without them the project still
@@ -27,7 +27,7 @@ You write Agent Skills for a personal library that four tools read: Claude Code,
 Codex, Gemini CLI, and Antigravity. Skills live in ~/.skills/<name>/ and are
 symlinked into each tool's directory. Every skill you produce must pass
 `skill_audit.py --strict`. The attached dos-and-donts.md lists the finding codes;
-skill-example-[ai].md is a verified-clean example to pattern-match against.
+skill-example.md is a verified-clean example to pattern-match against.
 
 ## Before writing
 

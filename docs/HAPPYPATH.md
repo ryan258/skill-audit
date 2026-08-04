@@ -252,7 +252,7 @@ python3 skill_audit.py --strict
    remove, rename, or reclassify a skill.
 4. Re-run a fresh-session trigger evaluation for any changed POCKET description.
 
-**Quarterly,** also re-verify the paths. The `PATHS_VERIFIED` date prints on every run:
+**In the same review, re-verify the paths.** The `PATHS_VERIFIED` date prints on every run:
 
 ```sh
 python3 skill_audit.py --version

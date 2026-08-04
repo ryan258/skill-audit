@@ -67,5 +67,10 @@ the equivalent distinction.
 - Need per-tool paths, flags, or verification? Read
   [skill-setup.md](../skill-setup.md).
 - Need the exact audit contract? Read [living-manual.md](living-manual.md).
+- Writing a new skill? Start from [the exemplar](exemplars/skill-example.md), or
+  set up an authoring assistant with the paste-ready instructions for a
+  [Claude Project](claude-project-skill-instructions.md), a
+  [Custom GPT](custom-openai-gpt-skill-instructions.md), or a
+  [Gemini Gem](custom-gemini-skill-instructions.md).
 - Need plain-language help using an existing library? Read the
   [friendly guide](eli5/README.md).

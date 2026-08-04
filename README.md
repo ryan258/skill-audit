@@ -167,6 +167,9 @@ The `PATHS_VERIFIED` date prints on every run so this is hard to forget. **Re-ve
 - `docs/eli5/skill-handbook.md` — kid-friendly usage guide for the current personal skills
 - `docs/dos-and-donts.md` — finding-by-finding remediation guide mapping every finding code to actionable rules
 - `docs/exemplars/skill-example.md` — one complete, verified-clean skill with the reasoning behind every line
+- `docs/claude-project-skill-instructions.md` — paste-ready instructions for a Claude Project that writes skills for this library
+- `docs/custom-openai-gpt-skill-instructions.md` — the same, for a Custom GPT (measured against the 8,000-character Instructions cap)
+- `docs/custom-gemini-skill-instructions.md` — the same, for a Gemini Gem
 - `docs/skill-wiki.md` — inventory, routing notes, and canonical-copy setup for installed skills
 - `skill-setup.md` — per-tool reference: wiring each of the four tools and verifying they see your skills
 - `brief.md` — the build spec, including the YAML subset the hand-rolled frontmatter parser supports (plus multi-line plain scalars, which the spec omits but real skill files use)

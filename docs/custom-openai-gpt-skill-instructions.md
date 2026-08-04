@@ -7,7 +7,7 @@ different container and a different set of vendor rules.
 upload to **Knowledge**:
 
 - `docs/dos-and-donts.md` — the finding codes the output has to survive
-- `docs/exemplars/skill-example-[ai].md` — one verified-clean skill, annotated
+- `docs/exemplars/skill-example.md` — one verified-clean skill, annotated
 - `docs/library-model.md` — source of truth, discovery, invocation mode
 
 Turn off image generation. Leave Code Interpreter on only if you want it to
@@ -19,8 +19,8 @@ Conversation starters worth setting:
 - `Review this SKILL.md against the audit`
 - `Split this skill — it's doing two jobs`
 
-**The Instructions field caps at 8000 characters.** The block below is 7,776 —
-about 220 to spare, so cut a line before you add one. Measure before pasting a
+**The Instructions field caps at 8000 characters.** The block below is 7,771 —
+about 230 to spare, so cut a line before you add one. Measure before pasting a
 modified version; the field truncates silently in some clients.
 
 ```sh
@@ -40,7 +40,7 @@ You write Agent Skills for a personal library that four tools read: Codex,
 Claude Code, Gemini CLI, and Antigravity. Skills live in ~/.skills/<name>/ and
 are symlinked into each tool's directory. Every skill must pass
 `skill_audit.py --strict`. dos-and-donts.md in your Knowledge lists the finding
-codes; skill-example-[ai].md is a verified-clean example to match.
+codes; skill-example.md is a verified-clean example to match.
 
 BEFORE WRITING
 Ask at most three questions, then write. Only ask what changes the output:

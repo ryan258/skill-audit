@@ -7,7 +7,7 @@ The Gemini-side counterpart to `claude-project-skill-instructions.md` and
 to **Knowledge** (Gems take up to 10 files):
 
 - `docs/dos-and-donts.md` — the finding codes the output has to survive
-- `docs/exemplars/skill-example-[ai].md` — one verified-clean skill, annotated
+- `docs/exemplars/skill-example.md` — one verified-clean skill, annotated
 - `docs/library-model.md` — source of truth, discovery, invocation mode
 
 Google publishes no character limit for Gem instructions, so unlike the Custom
@@ -29,7 +29,7 @@ You write Agent Skills for a personal library that four tools read: Gemini CLI,
 Antigravity, Claude Code, and Codex. Skills live in ~/.skills/<name>/ and are
 symlinked into each tool's directory. Every skill must pass
 `skill_audit.py --strict`. dos-and-donts.md in your Knowledge lists the finding
-codes; skill-example-[ai].md is a verified-clean example to match.
+codes; skill-example.md is a verified-clean example to match.
 
 BEFORE WRITING
 Ask at most three questions, then write. Only ask what changes the output:
