@@ -40,7 +40,11 @@ The report uses three words consistently. They're this tool's terms, not vendor 
 
 Budgets are counted **per tool**: a skill shelved in Claude but pocket in Codex costs Codex's listing and not Claude's. The pocket check is deliberately broader — a skill counts as pocket if *any* tool that can see it will auto-invoke it — so the two numbers can legitimately disagree. Both print the rule they used.
 
-The pocket check compares **global-scope skills only** against your config. A repo's own skills aren't governed by a global pocket list, so they're counted and listed separately rather than reported as drift.
+The pocket check compares **global-scope skills only** against your config. A repo's own skills aren't governed by a global pocket list, so they're counted and listed separately rather than reported as drift. The same applies to Claude Desktop: that library's on/off switch lives in the app, not in this config, so its pocket skills print under their own heading and are never called drift — a comparison you could not act on isn't a finding.
+
+The count itself is by **distinct name**. A skill synced to both your local library and Desktop is one skill in two places, so it counts once.
+
+**Vendor-installed skills** — Anthropic's Desktop built-ins and Codex's bundled `.system` skills — have their quality findings demoted to `notice` and tagged `[vendor-installed]`. You can't edit them, so they must never fail `--strict`. They are still counted and listed: their descriptions consume the same listing budget as yours.
 
 **Symlinks** — every path is resolved and deduplicated by real target, so one folder reachable from four cupboards reports as one skill with a list of reachable-from paths. Broken symlinks are named and skipped, not fatal. If `~/.gemini/skills` and `~/.agents/skills` resolve to the same target, you get a double-link warning.
 
@@ -137,7 +141,7 @@ Top-level keys: `meta`, `skills`, `findings`, `collisions`, `overlaps`, `danglin
 ## Sample
 
 ```text
-skill-audit 1.0.0 | paths verified 2026-08-01
+skill-audit 1.1.0 | paths verified 2026-08-04
 
 Summary
 -------

@@ -22,7 +22,7 @@ try:  # Python 3.11+.  The fallback keeps the promised clean-Mac support.
 except ImportError:  # pragma: no cover - exercised on macOS Python 3.9/3.10
     tomllib = None
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 PATHS_VERIFIED = "2026-08-04"
 # Re-verified 2026-08-04 against primary vendor sources, not summaries:
 #   Claude    code.claude.com/docs/en/skills  -> ~/.claude/skills, enterprise>personal>project
@@ -60,6 +60,20 @@ TOOLS = ("claude", "codex", "gemini", "antigravity", "claude-desktop")
 # and comparing their descriptions for overlap compares skills that can never
 # be offered to the same model at the same time.
 DESKTOP = "claude-desktop"
+# Skills you did not write and cannot edit: Anthropic's Desktop built-ins and
+# Codex's bundled .system skills. Their quality findings are demoted to notice
+# so a vendor's wording can never fail your --strict run. They are NOT hidden:
+# their descriptions still consume real listing budget, so you need to see them.
+# Matched on the `.system` directory rather than the full `~/.codex/skills/...`
+# path, so a Codex install that keeps its skills anywhere else still matches.
+VENDOR_MARKERS = ("/.system/",)
+QUALITY_CODES = {"thin_description", "bloated_description", "missing_trigger",
+                 "vague_description", "late_job_noun", "oversized_body",
+                 "unknown_field", "overlap", "intent_shadow",
+                 # A vendor's malformed frontmatter is as unfixable as its
+                 # wording: Codex ships skill-creator with a nested `metadata:`
+                 # block this parser cannot read, and no edit of yours changes it.
+                 "unparseable_field"}
 CONTEXT_WINDOW_DEFAULT = 200000  # conservative default when config is absent
 CLAUDE_ENTRY_CAP = 1536
 CODEX_BUDGET_FRACTION = 0.02
@@ -602,6 +616,34 @@ def classify_skill(real_path: str, entries: List[Dict[str, Any]], findings: List
             "occurrences": sorted({(entry["tool"], entry["label"], entry["source"]) for entry in entries})}
 
 
+def is_vendor(real_path: str, library: str = "local") -> bool:
+    """A skill installed by a vendor rather than authored by the user."""
+    return library == DESKTOP or any(marker in real_path for marker in VENDOR_MARKERS)
+
+
+def demote_vendor_findings(findings: List[Dict[str, Any]], skills: List[Dict[str, Any]],
+                           overlaps: Optional[List[Dict[str, Any]]] = None) -> None:
+    """Vendor wording is not the user's bug, so it must not fail --strict.
+
+    The matching overlap records are demoted too: leaving them at the old
+    severity would let a JSON consumer filtering on overlaps[].severity
+    disagree with the findings list about the same pair.
+    """
+    vendor_paths = {s["real_path"] for s in skills if is_vendor(s["real_path"], s.get("library", "local"))}
+    vendor_names = {s["name"] for s in skills if is_vendor(s["real_path"], s.get("library", "local"))}
+    for item in findings:
+        if item["severity"] != "warning" or item["code"] not in QUALITY_CODES: continue
+        # An overlap finding carries the joined pair label, not one skill.
+        subjects = item["skill"].split(PAIR_SEPARATOR) if PAIR_SEPARATOR in item["skill"] else [item["skill"]]
+        if item["path"] in vendor_paths or (subjects and all(s in vendor_names for s in subjects if s)):
+            item["severity"] = "notice"
+            item["message"] += " [vendor-installed]"
+    for pair in overlaps or []:
+        if pair["severity"] == "warning" and all(n in vendor_names for n in pair["skills"]):
+            pair["severity"] = "notice"
+            pair["vendor_installed"] = True
+
+
 def build_report(args: argparse.Namespace) -> Dict[str, Any]:
     selected = set(args.tool or TOOLS)
     entries: List[Dict[str, Any]] = []; findings: List[Dict[str, Any]] = []; locations = []
@@ -653,6 +695,7 @@ def build_report(args: argparse.Namespace) -> Dict[str, Any]:
     overlaps = overlap_report(skills, config, findings)
     budget = budget_report(skills, config, findings)
     pocket = pocket_report(skills, config, findings)
+    demote_vendor_findings(findings, skills, overlaps)
     recommendations = recommendations_for(findings)
     return {"meta": {"version": VERSION, "paths_verified": PATHS_VERIFIED,
                       "scan_timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -894,7 +937,18 @@ def pocket_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings
     # The audit-wide rule: pocket in ANY tool counts as pocket, because one
     # tool auto-invoking it is enough to cost you context and surprise you.
     # Per-tool disagreement is reported separately as mode_disagreement.
-    actual = {s["name"] for s in skills if "POCKET" in s["states"].values()}
+    # Judged per library. This config cannot turn a Claude Desktop skill off —
+    # that switch lives in the app — so a name is measured against it only when
+    # a LOCAL copy is pocket. Keying on the name alone reported 15 Desktop
+    # skills as drift no edit to this file could ever resolve, including names
+    # like brand-voice whose local copy is correctly shelved.
+    pocket_in = lambda group: {s["name"] for s in group if "POCKET" in s["states"].values()}
+    local_skills = [s for s in skills if s.get("library", "local") != DESKTOP]
+    actual = pocket_in(local_skills)
+    desktop_pocket = sorted(pocket_in([s for s in skills if s.get("library") == DESKTOP]))
+    # Counted by distinct name, matching the rule above. Summing the per-library
+    # lists instead counted a name synced to both libraries twice.
+    pocket_count = len(pocket_in(skills))
     # Union the scopes: when two distinct skills share a name, a dict
     # comprehension keeps only the last, so a name that is global in one copy
     # and project in another could lose its global scope and escape the check.
@@ -902,9 +956,10 @@ def pocket_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings
     for skill in skills: by_name_scopes[skill["name"]] |= set(skill["scopes"])
     rule = "a skill counts as pocket if it is POCKET in at least one tool that can see it"
     if not intended:
-        if len(actual) > 5: findings.append(finding("warning", "pocket_count", "More than five pocket skills and no config is present"))
-        return {"configured": False, "rule": rule, "pocket_count": len(actual), "correct": [],
-                "intended_shelf_but_pocket": [], "intended_pocket_but_shelf": [], "project_pocket": []}
+        if pocket_count > 5: findings.append(finding("warning", "pocket_count", "More than five pocket skills and no config is present"))
+        return {"configured": False, "rule": rule, "pocket_count": pocket_count, "correct": [],
+                "intended_shelf_but_pocket": [], "intended_pocket_but_shelf": [], "project_pocket": [],
+                "desktop_pocket": desktop_pocket}
     # A repo's own skills are not governed by a global pocket list, so comparing
     # them against it produced false "intended shelf" hits. They are counted and
     # listed, just not measured against the config.
@@ -912,10 +967,11 @@ def pocket_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings
                             if not {"global", "non-portable"} & set(by_name_scopes.get(name, set())))
     actual = actual - set(project_pocket)
     rule += "; the config comparison covers global-scope skills only"
+    rule += "; Claude Desktop's library is counted but not measured against it"
     # A configured name with no skill on disk is a stale config or a typo, not
     # a flag added by mistake. Reporting it as the latter sends you hunting for
     # a file that is not there.
-    known = {s["name"] for s in skills}
+    known = {s["name"] for s in local_skills}
     correct = sorted(intended & actual)
     shelf_but_pocket = sorted(actual - intended)
     pocket_but_shelf = sorted((intended - actual) & known)
@@ -923,9 +979,11 @@ def pocket_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings
     for name in shelf_but_pocket: findings.append(finding("warning", "intended_shelf_pocket", "Intended shelf skill is actually pocket", name))
     for name in pocket_but_shelf: findings.append(finding("warning", "intended_pocket_shelf", "Intended pocket skill is not actually pocket", name))
     for name in missing: findings.append(finding("warning", "intended_missing", "Config lists a pocket skill that is not installed", name))
-    return {"configured": True, "rule": rule, "pocket_count": len(actual) + len(project_pocket), "correct": correct,
+    return {"configured": True, "rule": rule,
+            "pocket_count": pocket_count, "correct": correct,
             "intended_shelf_but_pocket": shelf_but_pocket, "intended_pocket_but_shelf": pocket_but_shelf,
-            "intended_but_not_installed": missing, "project_pocket": project_pocket}
+            "intended_but_not_installed": missing, "project_pocket": project_pocket,
+            "desktop_pocket": desktop_pocket}
 
 
 def recommendations_for(findings: List[Dict[str, Any]]) -> List[str]:
@@ -1014,7 +1072,8 @@ def lines_for(report: Dict[str, Any], quiet: bool = False) -> List[str]:
                                           "intended shelf but pocket: %s" % ", ".join(pocket["intended_shelf_but_pocket"]),
                                           "intended pocket but shelf: %s" % ", ".join(pocket["intended_pocket_but_shelf"]),
                                           "in config but not installed: %s" % ", ".join(pocket.get("intended_but_not_installed", [])),
-                                          "project-scope pocket (not measured against config): %s" % ", ".join(pocket.get("project_pocket", []))])
+                                          "project-scope pocket (not measured against config): %s" % ", ".join(pocket.get("project_pocket", [])),
+                                          "Claude Desktop pocket (managed in the app, not this config): %s" % ", ".join(pocket.get("desktop_pocket", []))])
     if quiet:
         # The brief's rule is that a section never vanishes silently, because a
         # missing one reads as a bug. Naming the suppression keeps that true.

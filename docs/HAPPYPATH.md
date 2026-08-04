@@ -159,9 +159,9 @@ skills = ["startday", "session-handoff", "brand-voice"]
 context_window = 200000
 ```
 
-Now the pocket check reports lists instead of a bare count: correct, intended-shelf-but-actually-pocket (a missing flag), intended-pocket-but-actually-shelf (a flag added by mistake), in-config-but-not-installed (a typo or a stale entry), and project-scope pocket skills.
+Now the pocket check reports lists instead of a bare count: correct, intended-shelf-but-actually-pocket (a missing flag), intended-pocket-but-actually-shelf (a flag added by mistake), in-config-but-not-installed (a typo or a stale entry), project-scope pocket skills, and Claude Desktop pocket skills.
 
-That last list is informational. A repo's own skills aren't governed by your global pocket list, so they're counted but never reported as drift against it.
+The last two lists are informational. A repo's own skills aren't governed by your global pocket list, and a Desktop skill's switch lives in the app rather than this file, so both are counted but never reported as drift against it.
 
 ---
 

@@ -3,7 +3,7 @@
 New to this library? Start with [The skill-library model](library-model.md) for
 the orientation; this manual is the detailed audit and operations reference.
 
-> **Implementation status:** this manual describes version 1.0.0 of
+> **Implementation status:** this manual describes version 1.1.0 of
 > `skill_audit.py`, as it exists in this repository. It is an operational
 > reference, not a promise that a vendor will keep the same filesystem paths or
 > invocation behavior. Check `PATHS_VERIFIED` with `--version` and re-verify the
@@ -288,7 +288,9 @@ number excluded so a low total cannot be mistaken for full coverage.
 
 The separate **pocket check** uses a deliberately broader rule: a skill counts
 as pocket if any visible tool marks it POCKET. This can legitimately differ from
-either per-tool budget total.
+either per-tool budget total. The count is by distinct name across every
+library, so a skill synced to both the local library and Claude Desktop counts
+once rather than twice.
 
 ## Pocket intent and configuration
 
@@ -336,6 +338,40 @@ Project and nested skills still contribute to the total pocket count, but are
 listed separately and never declared drift from a user-global configuration.
 If duplicate copies share a name, their scopes are unioned before this decision,
 so a global copy cannot accidentally disappear behind a project copy.
+
+Claude Desktop's library is treated the same way, for a different reason: this
+configuration file cannot switch a Desktop skill off — that control lives in the
+app — so measuring one against the list would report drift no edit could ever
+resolve. Its pocket skills are counted and printed under `desktop_pocket`, and
+the config comparison covers the local libraries only. A name is judged against
+the list when a *local* copy is POCKET, so a skill correctly shelved locally is
+not reported as drift merely because the Desktop copy is enabled.
+
+## Vendor-installed skills
+
+Some skills arrive already written: Anthropic's built-ins in the Claude Desktop
+library, and the skills Codex bundles under a `.system` directory in its skills
+tree. You did not author them and cannot edit them.
+
+Their findings are still produced — the audit does not hide them, because a
+vendor's description consumes exactly as much listing budget as your own, and a
+budget that quietly omitted them would understate the real cost. But quality
+findings against them are demoted from `warning` to `notice` and their message
+gains a `[vendor-installed]` suffix naming the reason. A `--strict` run must
+never fail on wording you have no power to change.
+
+The demotion covers description quality, structure, overlap, intent shadowing,
+and unparseable frontmatter fields — Codex ships `skill-creator` with a nested
+`metadata:` block this parser cannot read, and no edit of yours changes that.
+Overlap *pairs* are demoted alongside the matching finding when both skills are
+vendor-installed, so a consumer filtering on `overlaps[].severity` cannot
+disagree with the findings list about the same pair. A pair with one vendor
+skill and one of yours keeps its original severity: that one you can act on, by
+changing your own side.
+
+Detection is by library for Desktop, and by a `.system` path segment for Codex,
+so a Codex install that keeps its skills somewhere other than `~/.codex/skills/`
+is still recognized.
 
 ## Name collisions and precedence
 
@@ -452,6 +488,10 @@ still detects only lexical overlap.
 Every finding has a stable `code`, a `severity`, a human-readable `message`, and
 where available a `skill`, `path`, and source `line`. Integrations should filter
 on `code`, not message wording.
+
+The severities below are the ones a finding gets against a skill you wrote. On a
+vendor-installed skill the quality codes are demoted one level to `notice`; see
+*Vendor-installed skills* above for which codes and why.
 
 ### Errors
 

@@ -130,6 +130,14 @@ config entry with no skill on disk — a stale config or a typo, not a mistaken 
 **Don't expect the config to govern a repo's own skills.** Project-scope skills
 are counted and listed separately, never measured against a global pocket list.
 
+**Don't try to shelve a Claude Desktop skill from this file.** That switch lives
+in the app, so the audit lists Desktop pocket skills separately rather than
+calling them drift you could fix here. For the same reason, don't chase the
+quality warnings on skills you didn't write: Anthropic's Desktop built-ins and
+Codex's bundled `.system` skills are demoted to `notice` and tagged
+`[vendor-installed]`, so they never fail `--strict`. They still count against
+your listing budget, which is the part you *can* act on — by shelving them.
+
 **Don't set the two tools' flags to disagree.** `disable-model-invocation: true`
 for Claude and `policy.allow_implicit_invocation: false` in `agents/openai.yaml`
 for Codex are the same intent; setting one and not the other is

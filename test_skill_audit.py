@@ -575,6 +575,89 @@ def test_desktop_absent_or_non_boolean_enabled_is_unknown_not_shelf():
         shutil.rmtree(tmp)
 
 
+def test_desktop_pocket_is_counted_but_not_judged_against_the_config():
+    """The config cannot switch a Desktop skill off, so it must not grade one."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        body = '---\nname: %s\ndescription: "Does a thing. Use when the user asks."\n---\nbody\n'
+        # `shared` exists in both libraries: pocket in Desktop, correctly shelved
+        # locally. Keying on the name alone reported it as drift.
+        write_skill(tmp / "global/claude-desktop", "desk-only", body % "desk-only")
+        write_skill(tmp / "global/claude-desktop", "shared", body % "shared")
+        write_skill(tmp / "global/claude", "shared",
+                    '---\nname: shared\ndescription: "Does a thing. Use when the user asks."\n'
+                    'disable-model-invocation: true\n---\nbody\n')
+        (tmp / "global/manifest.json").write_text(json.dumps({"skills": [
+            {"name": "desk-only", "enabled": True}, {"name": "shared", "enabled": True}]}), encoding="utf-8")
+        config = tmp / "audit.toml"
+        config.write_text('[pocket]\nskills = []\n', encoding="utf-8")
+        report = run(tmp, tool=["claude", "claude-desktop"], config=str(config))
+        pocket = report["pocket_check"]
+        assert pocket["intended_shelf_but_pocket"] == [], pocket["intended_shelf_but_pocket"]
+        assert sorted(pocket["desktop_pocket"]) == ["desk-only", "shared"], pocket["desktop_pocket"]
+        assert pocket["pocket_count"] == 2, "Desktop skills are still counted, just not judged"
+        assert not any(f["code"] == "intended_shelf_pocket" for f in report["findings"])
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_vendor_skill_quality_findings_are_demoted_to_notice():
+    """A vendor's wording is not your bug and must never fail --strict."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        long_desc = "Use when the user asks. " + ("padding words here " * 30)
+        write_skill(tmp / "global/claude-desktop", "vendor-bloat",
+                    '---\nname: vendor-bloat\ndescription: "%s"\n---\nbody\n' % long_desc)
+        write_skill(tmp / "global/claude", "mine-bloat",
+                    '---\nname: mine-bloat\ndescription: "%s"\n---\nbody\n' % long_desc)
+        report = run(tmp, tool=["claude", "claude-desktop"])
+        sev = {f["skill"]: f["severity"] for f in report["findings"] if f["code"] == "bloated_description"}
+        assert sev.get("vendor-bloat") == "notice", sev
+        assert sev.get("mine-bloat") == "warning", "your own skills keep full severity: %s" % sev
+        assert any("[vendor-installed]" in f["message"] for f in report["findings"]
+                   if f["skill"] == "vendor-bloat"), "the demotion must say why"
+        # is_vendor also covers Codex's bundled .system tree, by path.
+        assert sa.is_vendor("/home/u/.codex/skills/.system/skill-creator")
+        assert not sa.is_vendor("/home/u/.skills/my-skill")
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_vendor_unparseable_frontmatter_is_demoted_too():
+    """Codex ships skill-creator with a `metadata:` block this parser cannot read."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        broken = ('---\nname: %s\ndescription: "Does a thing. Use when the user asks."\n'
+                  'metadata:\n  version: 1\n---\nbody\n')
+        write_skill(tmp / "global/codex/.system", "vendor-broken", broken % "vendor-broken")
+        write_skill(tmp / "global/codex", "mine-broken", broken % "mine-broken")
+        report = run(tmp, tool=["codex"])
+        sev = {f["skill"]: f["severity"] for f in report["findings"] if f["code"] == "unparseable_field"}
+        assert sev.get("vendor-broken") == "notice", sev
+        assert sev.get("mine-broken") == "warning", "your own broken frontmatter still fails: %s" % sev
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_a_name_pocket_in_both_libraries_counts_once():
+    """pocket_count is by distinct name, matching the rule the section prints."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        body = '---\nname: %s\ndescription: "Does a thing. Use when the user asks."\n---\nbody\n'
+        for lib in ("global/claude-desktop", "global/claude"):
+            write_skill(tmp / lib, "synced", body % "synced")
+        (tmp / "global/manifest.json").write_text(json.dumps({"skills": [
+            {"name": "synced", "enabled": True}]}), encoding="utf-8")
+        report = run(tmp, tool=["claude", "claude-desktop"])
+        assert report["pocket_check"]["pocket_count"] == 1, "one name synced to two libraries is one skill"
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_desktop_and_local_libraries_are_never_compared():
     """A name synced to both is one skill in two libraries, not a collision."""
     tmp = Path(tempfile.mkdtemp())
