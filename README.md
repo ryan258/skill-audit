@@ -4,6 +4,12 @@ A read-only CLI that finds every `SKILL.md` on your Mac and tells you what's wro
 
 It never modifies a skill file. The only path it can write to is the one you pass to `--markdown`.
 
+## Start with the library model
+
+Before choosing paths or flags, read [The skill-library model](docs/library-model.md).
+It separates the three things that are easy to conflate: the canonical personal
+copy, a tool's discovery and collision rules, and that tool's invocation mode.
+
 ## Run it
 
 ```sh
@@ -155,10 +161,12 @@ The `PATHS_VERIFIED` date prints on every run so this is hard to forget. **Re-ve
 - `skill_audit.py` — the whole tool, single file by design
 - `test_skill_audit.py` — self-check, no framework: `python3 test_skill_audit.py`
 - `docs/HAPPYPATH.md` — **start here**: the linear route from a pile of skill files to a `--strict`-clean library
+- `docs/library-model.md` — **orientation first**: canonical copy, tool discovery, and POCKET/SHELF/UNKNOWN in one model
 - `docs/living-manual.md` — detailed operational reference for discovery, modes, overlap heuristics, output, and the current skill map
 - `docs/eli5/README.md` — kid-friendly guide to the personal skill library and audit
 - `docs/eli5/skill-handbook.md` — kid-friendly usage guide for the current personal skills
 - `docs/dos-and-donts.md` — finding-by-finding remediation guide mapping every finding code to actionable rules
+- `docs/exemplars/skill-example.md` — one complete, verified-clean skill with the reasoning behind every line
 - `docs/skill-wiki.md` — inventory, routing notes, and canonical-copy setup for installed skills
 - `skill-setup.md` — per-tool reference: wiring each of the four tools and verifying they see your skills
 - `brief.md` — the build spec, including the YAML subset the hand-rolled frontmatter parser supports (plus multi-line plain scalars, which the spec omits but real skill files use)

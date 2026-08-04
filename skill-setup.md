@@ -1,5 +1,10 @@
 # Making sure each AI actually uses your skills
 
+Need the conceptual map before the per-tool details? Read
+[The skill-library model](docs/library-model.md). This guide focuses on the
+discovery, listing, and invocation checks after you have chosen a canonical
+personal copy.
+
 A skill file existing on disk means nothing. Four things have to be true, in order, before an agent will use it:
 
 1. **Installed** — the tool is on the machine and runs

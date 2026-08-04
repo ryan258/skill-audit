@@ -20,6 +20,10 @@ can follow when the recipe fits the job.
 
 It does not change the booklets. It only makes a report.
 
+If you want the grown-up technical map of the same idea, see
+[The skill-library model](../library-model.md). This friendly guide explains the
+same three questions with fewer vendor-specific details.
+
 ## Where the real booklets live
 
 Your personal, shared booklets live in one main home:

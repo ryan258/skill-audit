@@ -15,6 +15,11 @@ The description is the whole routing decision. The agent picks a skill by readin
 descriptions, not bodies — a perfect 400-line body behind a vague description
 never runs.
 
+**Do state the boundary, not just the job.** A good description says what selects
+the skill and, where a nearby skill exists, what does not. Do not rewrite with
+synonyms merely to lower an overlap count; that hides a review signal without
+making routing clearer. See [the routing-contract guidance](living-manual.md#write-for-distinction-not-for-the-threshold).
+
 **Do put the distinctive noun in the first 100 characters.**
 
 ```yaml

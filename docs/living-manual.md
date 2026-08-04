@@ -1,5 +1,8 @@
 # skill-audit living manual
 
+New to this library? Start with [The skill-library model](library-model.md) for
+the orientation; this manual is the detailed audit and operations reference.
+
 > **Implementation status:** this manual describes version 1.0.0 of
 > `skill_audit.py`, as it exists in this repository. It is an operational
 > reference, not a promise that a vendor will keep the same filesystem paths or
@@ -359,6 +362,26 @@ declare a trigger share intentional.
 Treat an overlap result as a review queue. Keep two skills separate only when a
 user can express the boundary in one short sentence. Otherwise merge them, make
 one explicit-only, or rewrite descriptions around non-overlapping triggers.
+
+### Write for distinction, not for the threshold
+
+Do not swap synonyms just to reduce the shared-term count. That can make the
+warning disappear while leaving two agents-facing descriptions equally vague.
+The heuristic is a prompt to examine routing, not a game to win.
+
+For each skill, write a small routing contract in its description or supporting
+documentation:
+
+| Part | Question it answers |
+|---|---|
+| **Use when** | What outcome, evidence, or request should select this skill? |
+| **Do not use when** | Which nearby job belongs to another skill instead? |
+| **Hand off to** | If the request crosses that boundary, which skill owns it? |
+
+For example, a file-search skill can say it is for locating and reading files,
+not editing them, and hand editing requests to the relevant implementation
+skill. These explicit boundaries improve real routing even though the audit
+still detects only lexical overlap.
 
 ## Findings reference
 

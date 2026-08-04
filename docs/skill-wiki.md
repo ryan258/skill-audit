@@ -3,6 +3,11 @@
 Snapshot: 2026-08-03. This is a live-library reference, not a claim that every
 agent will select a skill for every matching prompt.
 
+For the stable architecture behind this dated inventory, start with
+[The skill-library model](library-model.md). It separates canonical storage,
+tool discovery, and invocation mode; this page records the current library
+against that model.
+
 ## What is installed where
 
 | Surface | Location | Current state |

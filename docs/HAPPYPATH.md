@@ -2,6 +2,10 @@
 
 The shortest route from a pile of `SKILL.md` files to a library that four agents use correctly and you can keep clean.
 
+Before the sequence, read [The skill-library model](library-model.md). It gives
+the one-page map of canonical copies, tool discovery, collision rules, and
+POCKET/SHELF/UNKNOWN. This guide turns that model into a working library.
+
 Read this once, top to bottom. `../skill-setup.md` is the per-tool reference you'll dip back into; `../README.md` is the flag reference. This is the sequence.
 
 ---
@@ -222,7 +226,11 @@ Do this for each pocket skill once. Shelf skills don't need it — you invoke th
 
 ---
 
-## The maintenance loop
+## Lifecycle management
+
+A clean audit is a snapshot, not a permanent state. Maintain the library as a
+small, curated collection rather than waiting for a budget or path failure to
+force a cleanup.
 
 **After any change to a skill:**
 
@@ -232,7 +240,19 @@ python3 skill_audit.py --strict
 
 **Before adding a new pocket skill,** check the budget line first. Something usually has to move to the shelf to make room. The listing budget is roughly 1% of the context window for Claude, 2% (or 8,000 characters) for Codex.
 
-**Quarterly,** re-verify the paths. The `PATHS_VERIFIED` date prints on every run:
+**Quarterly,** do a curation review:
+
+1. Run `python3 skill_audit.py --strict` and resolve new warnings deliberately.
+2. Review every shelf skill: is its owner, trigger, and specialized job still
+   clear? Keep valuable rare workflows; do not treat lack of recent use as proof
+   that an incident, migration, or seasonal skill is obsolete.
+3. Archive a retired personal skill outside `~/.skills/`, or remove it only
+   after confirming no tool depends on it. If retention is uncertain, record
+   why it remains. Update the pocket intent list and library map when you add,
+   remove, rename, or reclassify a skill.
+4. Re-run a fresh-session trigger evaluation for any changed POCKET description.
+
+**Quarterly,** also re-verify the paths. The `PATHS_VERIFIED` date prints on every run:
 
 ```sh
 python3 skill_audit.py --version
