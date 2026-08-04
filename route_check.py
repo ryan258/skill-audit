@@ -27,15 +27,26 @@ import skill_audit as sa
 
 NONE = "NONE"
 SYSTEM = ("You are the skill router for an agent. Given the available skills and a user request, "
-          "reply with exactly one skill name from the list, or %s if no skill fits. "
+          "reply with exactly one skill name from the AVAILABLE SKILLS list, or %s if no skill fits. "
+          "Do not invent or synthesize skill names that are not in the list. "
           "Reply with the name only - no punctuation, no explanation." % NONE)
 
 
+
 def pocket_listing(args: argparse.Namespace) -> List[Tuple[str, str]]:
-    """The name/description pairs a model actually sees, straight from the auditor."""
+    """The name/description pairs a model actually sees, straight from the auditor.
+
+    Claude Desktop is excluded unless you ask for it by name with --tool. This
+    harness shells out to `claude`, and the audit's own library model says that
+    library never shares a listing with the local one, so pooling them showed
+    the model 20 skills the CLI cannot offer — and listed the five synced names
+    twice, with two competing descriptions each.
+    """
     report = sa.build_report(argparse.Namespace(repo=args.repo, config=args.config, tool=args.tool))
+    keep_desktop = bool(args.tool) and sa.DESKTOP in args.tool
     return sorted({(skill["name"], skill["description"]) for skill in report["skills"]
-                   if "POCKET" in skill["states"].values()})
+                   if "POCKET" in skill["states"].values()
+                   and (keep_desktop or skill.get("library", "local") != sa.DESKTOP)})
 
 
 def load_cases(path: Path) -> List[Dict[str, Any]]:
@@ -61,8 +72,16 @@ def load_cases(path: Path) -> List[Dict[str, Any]]:
 
 def ask_claude(model: str, listing: str, query: str) -> str:
     prompt = "AVAILABLE SKILLS\n%s\n\nUSER REQUEST\n%s" % (listing, query)
+    # --disable-slash-commands is load-bearing, not tidiness. Without it the CLI
+    # injects its own skill listing (update-config, dataviz, run, plus every
+    # installed plugin's skills) alongside ours, so the model routes against a
+    # set this harness never assembled and cannot grade. That is how a run
+    # returned `update-config` for a PATH question: a real skill we did not
+    # offer, not a hallucination. Verified 2026-08-04: with the flag the CLI
+    # reports no such skill; without it, yes.
     try:
-        result = subprocess.run(["claude", "-p", "--model", model, "--system-prompt", SYSTEM, prompt],
+        result = subprocess.run(["claude", "-p", "--model", model, "--disable-slash-commands",
+                                 "--system-prompt", SYSTEM, prompt],
                                 capture_output=True, text=True, timeout=180)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return "ERROR: %s" % exc
