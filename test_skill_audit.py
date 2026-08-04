@@ -118,6 +118,16 @@ def test_overlap_thresholds():
     assert sa.overlap_report([two, other], {}, findings) == [], "2 shared terms must be silent"
 
 
+def test_overlap_demoted_when_shelved():
+    findings = []
+    five_shelved = {"name": "a", "description": "alpha bravo charlie delta echo", "states": {"claude": "SHELF", "codex": "SHELF"}}
+    five_pocket = {"name": "b", "description": "alpha bravo charlie delta echo", "states": {"claude": "POCKET", "codex": "POCKET"}}
+    pairs = sa.overlap_report([five_shelved, five_pocket], {}, findings)
+    assert pairs and pairs[0]["severity"] == "notice", pairs
+    assert findings[0]["severity"] == "notice"
+
+
+
 def test_budget_ignores_unknown_from_other_tools():
     skills = [
         {"name": "seen", "description": "d" * 100, "states": {"claude": "POCKET", "gemini": "UNKNOWN"},
@@ -297,6 +307,18 @@ def test_overlap_labels_disambiguate_two_copies_of_one_name():
             {"name": "dup", "real_path": "/repo/dup", "description": shared}]
     overlaps = sa.overlap_report(pair, {}, [])
     assert overlaps[0]["labels"] == ["/home/dup", "/repo/dup"], overlaps[0]["labels"]
+
+
+def test_yaml_comments_are_not_unparseable_fields():
+    # A hand-written agents/openai.yaml normally explains why a skill is
+    # shelved. Those comment lines used to be reported as broken frontmatter.
+    text = "# why this skill is shelved\npolicy:\n  # explicit invocation only\n  allow_implicit_invocation: false\n"
+    data, bad, _ = sa.parse_frontmatter("---\n" + text + "---\n", nested_policy=True)
+    assert not bad, "comment lines must not be reported as fields: %s" % bad
+    assert sa.bool_value(data["policy"]["allow_implicit_invocation"]) is False
+
+    data, bad, _ = sa.parse_frontmatter("---\n# leading note\nname: x\ndescription: y\n---\n")
+    assert not bad and data["name"] == "x", (data, bad)
 
 
 def test_wrong_shaped_config_is_dropped_not_fatal():

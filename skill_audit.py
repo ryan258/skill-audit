@@ -158,7 +158,10 @@ def parse_frontmatter(text: str, nested_policy: bool = False) -> Tuple[Optional[
     key_line = re.compile(r"^([A-Za-z0-9_-]+):(?:[ ](.*)|[ ]*)$")
     while i < end:
         raw = lines[i]
-        if not raw.strip():
+        # A whole-line comment is legal YAML and common in a hand-written
+        # agents/openai.yaml. Reporting one as an unparseable field made a valid
+        # file look broken.
+        if not raw.strip() or raw.lstrip().startswith("#"):
             i += 1
             continue
         match = key_line.match(raw)
@@ -187,7 +190,7 @@ def parse_frontmatter(text: str, nested_policy: bool = False) -> Tuple[Optional[
             children = []
             while i + 1 < end and (not lines[i + 1].strip() or lines[i + 1][0].isspace()):
                 i += 1
-                if lines[i].strip():
+                if lines[i].strip() and not lines[i].lstrip().startswith("#"):
                     children.append((lines[i], i + 1))
             if not children:
                 data[key] = ""
@@ -680,8 +683,14 @@ def overlap_report(skills: List[Dict[str, Any]], config: Dict[str, Any], finding
             phrases = sorted(quoted_phrases(first["description"]) & quoted_phrases(second["description"]))
             count = len(shared)
             if count <= 2 and not phrases: continue
-            severity = "warning" if count >= 5 or phrases else "notice"
-            if severity == "notice" and first["name"] not in owners and second["name"] not in owners: severity = "warning"
+            first_states = first.get("states") or {t: "POCKET" for t in TOOLS}
+            second_states = second.get("states") or {t: "POCKET" for t in TOOLS}
+            both_pocket = any(first_states.get(t) == "POCKET" and second_states.get(t) == "POCKET" for t in TOOLS)
+            if both_pocket:
+                severity = "warning" if count >= 5 or phrases else "notice"
+                if severity == "notice" and first["name"] not in owners and second["name"] not in owners: severity = "warning"
+            else:
+                severity = "notice"
             # Two copies of one name are a real pair; label them by path so the
             # output is not the useless "brand-voice / brand-voice".
             if first["name"] == second["name"]:
