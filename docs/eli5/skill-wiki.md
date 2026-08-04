@@ -5,7 +5,8 @@ Imagine `skill-wiki` as the **master inventory list and rulebook** for all the i
 Here is the simple breakdown of what it explains:
 
 ## 1. 🔗 "One Master Copy" Rule (Magic Shortcuts)
-Instead of writing 4 separate copies of the same booklet for 4 different AI apps ([Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview), [Codex](https://openai.com), [Gemini CLI](https://gemini.google.com), [Antigravity](https://antigravity.google)), you write **one master booklet**. Then, you create "magic shortcuts" (symlinks) so all 4 AI apps can read from the exact same single book!
+Instead of writing separate copies of the same personal booklet for several AI
+apps ([Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview), [Codex](https://openai.com), [Gemini CLI](https://gemini.google.com), [Antigravity](https://antigravity.google)), you write **one master booklet**. Then, you create "magic shortcuts" (symlinks) so the apps can reach that same book. The audit can see the shortcuts; a real app inventory or chat is still needed to prove an app loaded it.
 
 ## 2. 🎒 Pocket vs. 🧹 Shelf
 

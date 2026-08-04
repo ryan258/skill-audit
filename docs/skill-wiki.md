@@ -8,14 +8,15 @@ agent will select a skill for every matching prompt.
 | Surface | Location | Current state |
 |---|---|---|
 | [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) | `~/.claude/skills/` | 27 filesystem entries, including the linked `pkos-ingest` ([PKOS](https://github.com/ryan258/PKos)); 26 shared skills were verified live before it was added. |
-| [Codex](https://openai.com) | `~/.codex/skills/` plus the shared skill path | Reads `pkos-ingest` directly from its canonical location; the 26 existing shared skills were verified live. Claude/Codex shelf policies match. |
+| [Codex](https://openai.com) | `~/.codex/skills/` plus `~/.agents/skills/` | Bundled/runtime skills remain in the Codex directory; personal shared skills resolve through the shared path. |
 | [Gemini CLI](https://gemini.google.com) | `~/.agents/skills/` → `~/.claude/skills/` | The shared `pkos-ingest` link resolves here; re-run `gemini skills list --all` after a Gemini restart to refresh its inventory. |
 | [Antigravity](https://antigravity.google) / Antigravity IDE | `~/.gemini/config/skills/` → `~/.agents/skills/` | The shared `pkos-ingest` link resolves on the configured path. Its activation mode is undocumented, so it remains `UNKNOWN`. |
 | Claude Desktop Chat/Cowork plugins | Account-level Claude plugin directory | No Claude plugins installed as of this snapshot; this is separate from the local skill library. |
 
-The personal source of truth is `~/.skills/`. Claude-only packaged skills live
-directly under `~/.claude/skills/`. The shared links intentionally expose the
-shared library to the other coding agents without making copies.
+The personal source of truth is `~/.skills/`. Its entries are linked into
+`~/.claude/skills/`, then exposed to the other coding agents through the shared
+directory aliases. Bundled/runtime skills remain at their tool-managed paths;
+they are not copied into the personal library.
 
 ## Canonical-copy model
 
@@ -29,17 +30,15 @@ Gemini CLI:            ~/.gemini/config/skills -> ~/.agents/skills -> ~/.claude/
 Antigravity products:  ~/.gemini/config/skills -> ~/.agents/skills -> ~/.claude/skills
 ```
 
-`pkos-ingest` is a deliberate sibling of that shared collection. Its canonical
-copy remains at `~/.codex/skills/pkos-ingest/`, where Codex reads it directly.
-The shared Claude entry is a symlink:
+`pkos-ingest` now follows the same rule as every other personal shared skill:
 
 ```text
-~/.claude/skills/pkos-ingest -> ~/.codex/skills/pkos-ingest
+~/.claude/skills/pkos-ingest -> ~/.skills/pkos-ingest
 ```
 
-That makes the same PKOS instruction available to Claude Code and Gemini
-without copying or maintaining a second document. This is a *per-skill*
-canonical-copy rule; not every skill must originate in the same parent folder.
+One physical `SKILL.md` serves Claude Code, Codex, Gemini, and Antigravity
+through the shared path chain. This canonical-copy rule applies to personal
+skills; bundled/runtime skills remain tool-managed.
 
 Claude Desktop is intentionally outside this chain. Its **Customize → Plugins**
 inventory does not auto-load `~/.claude/skills/`. To use a shared skill in
@@ -53,10 +52,9 @@ canonical skill; do not duplicate the `SKILL.md`.
   explicit request.
 - **Gemini / Antigravity** — their automatic-invocation state is `UNKNOWN`; do
   not infer that an enabled/listed skill is automatic or shelf-only.
-- Every listed skill is on the shared filesystem path for Claude Code, Codex,
-  Gemini, and Antigravity. `pkos-ingest` additionally uses Codex as its
-  canonical location and is linked into that shared path. The **AI** column
-  records the verified mode where one exists.
+- Every listed personal skill is on the shared filesystem path for Claude Code,
+  Codex, Gemini, and Antigravity. The **AI** column records the verified mode
+  where one exists.
 
 ## Happy path
 
@@ -82,7 +80,7 @@ since the link was added, so name it explicitly there for now.
 
 | Skill | Canonical location | Use it when | AI |
 |---|---|---|---|
-| `pkos-ingest` | `~/.codex/skills/pkos-ingest/` → `~/.claude/skills/pkos-ingest/` | You need to locally preserve and normalize files, folders, notes, generic ZIPs, or ChatGPT-export ZIPs into PKOS. | Codex: available directly; Claude Code/Gemini: shared link, invoke explicitly pending refresh; Claude Desktop: requires plugin wrapper. |
+| `pkos-ingest` | `~/.skills/pkos-ingest/` → `~/.claude/skills/pkos-ingest/` | You need to locally preserve and normalize files, folders, notes, generic ZIPs, or ChatGPT-export ZIPs into PKOS. | Shared through the same path chain as the other personal skills; Claude Code/Gemini activation still needs a fresh live verification; Claude Desktop requires a plugin wrapper. |
 
 ## Pocket skills
 
