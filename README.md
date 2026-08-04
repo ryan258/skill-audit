@@ -76,6 +76,20 @@ A skill is any directory containing a `SKILL.md`.
 
 `--json` overrides `--format` and `--quiet` — JSON is always the full structure. `--markdown` always writes the full report. `--quiet` changes what prints, never the exit code.
 
+## Routing harness
+
+`skill_audit.py` never asks a model anything — it reads files. `route_check.py` is the other half: it hands a real model the pocket listing and a request, and checks which skill comes back.
+
+```sh
+python3 route_check.py cases/dhp-context-sync.jsonl --repeat 3
+```
+
+Cases are JSONL — `{"query": "...", "expected": "skill-name"}`, or `"expected": null` for "no skill should fire". Routing is classification, so grading is string equality: no second model judging prose, nothing to calibrate. Only POCKET skills are offered, because a shelved skill isn't in the model's listing and can't be routed to. A case expecting one is reported as `SKIP`, costs no model calls, and doesn't count toward the pass rate or the exit code — the sample file above ships with three such cases, since `dhp-context-sync` is shelved.
+
+`--repeat N` runs each case N times and reports a rate. Routing is non-deterministic, and a skill that wins 2 times in 3 is the finding. `--model` picks the alias passed to `claude --model` (default `sonnet`); `--jobs` sets how many calls run in parallel (default 8). Both reject values below 1.
+
+It shells out to `claude -p` with `--system-prompt`, so it needs the CLI on PATH, costs tokens, and takes seconds per call. That is why it is a separate file: the auditor stays offline, instant, and dependency-free.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -155,7 +169,7 @@ Every section prints even when empty, with a "none found" note. A section that s
 
 1. **It doesn't detect real conflicts.** Two skills can give opposite instructions in prose that shares no keywords. The overlap check is a word-similarity hint — a human still reads the files.
 2. **It doesn't fix anything.** No auto-fix mode, not even behind a flag.
-3. **It doesn't verify triggering.** Whether a skill fires on a given prompt requires running the agent. That's an eval, not an audit.
+3. **It doesn't verify triggering.** Whether a skill fires on a given prompt requires running the agent. That's an eval, not an audit — see `route_check.py` below, which is that eval and is deliberately a separate tool.
 4. **It doesn't check Gemini or Antigravity shelf state.** No documented flag exists for either.
 
 ## Path instability
@@ -166,8 +180,11 @@ The `PATHS_VERIFIED` date prints on every run so this is hard to forget. **Re-ve
 
 ## Files
 
-- `skill_audit.py` — the whole tool, single file by design
+- `skill_audit.py` — the auditor, single file by design: static, offline, instant, no dependencies
 - `test_skill_audit.py` — self-check, no framework: `python3 test_skill_audit.py`
+- `route_check.py` — the routing harness: asks a real model which skill it would pick. Separate file on purpose; it needs the `claude` CLI and costs tokens.
+- `test_route_check.py` — self-check for the harness's grading, model call stubbed: `python3 test_route_check.py`
+- `cases/` — JSONL routing cases, one file per skill
 - `docs/HAPPYPATH.md` — **start here**: the linear route from a pile of skill files to a `--strict`-clean library
 - `docs/library-model.md` — **orientation first**: canonical copy, tool discovery, and POCKET/SHELF/UNKNOWN in one model
 - `docs/living-manual.md` — detailed operational reference for discovery, modes, overlap heuristics, output, and the current skill map

@@ -1,0 +1,14 @@
+# Routing cases for dhp-context-sync. "expected": null means no skill should fire.
+#
+# DORMANT: the skill is shelved (disable-model-invocation: true), so it is not in
+# the pocket listing and the three positive cases cannot pass. They are kept as a
+# record of what the description was tuned to catch. The two negative cases still
+# hold — they assert no OTHER skill grabs these requests.
+# Retired: "Debug the syntax in my shell start script." — it was written to test this
+# skill's exclusion, and once the description stopped claiming "scripts" it started
+# routing to gitnexus-debugging instead. It now measures that skill, not this one.
+{"query": "Sync my current local shell context and verify session pointers.", "expected": "dhp-context-sync"}
+{"query": "Restore my active session context state.", "expected": "dhp-context-sync"}
+{"query": "Run my environment context script and show me the state.", "expected": "dhp-context-sync"}
+{"query": "Fix a syntax error in my .bashrc file.", "expected": null}
+{"query": "Reconfigure my PATH environment variable for this shell.", "expected": null}

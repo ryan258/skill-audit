@@ -182,7 +182,20 @@ purpose: a thin description shouldn't break a pipeline you didn't intend it to.
 
 **Don't filter on message text.** Filter on `code` — the messages are written for
 humans and will be reworded. The full list is `FINDING_CODES` at the top of
-`skill_audit.py` (26 codes).
+`skill_audit.py` (28 codes).
+
+**Don't read `intent_shadow` as a routing failure.** It fires when one skill's
+quoted trigger phrase is a whole-word slice of another's — a hint that the two
+compete, not proof either is unreachable. It is a notice on purpose and cannot
+fail `--strict` on its own. Which skill wins is the model's call; use
+`route_check.py` if you want that measured rather than guessed.
+
+**Do fix `dangling_reference` by renaming the pointer, not by ignoring it.** It
+means a body says `skills/<name>/SKILL.md` and no such skill is in the scanned
+library — a rename or a delete that rotted the reference. Only path-shaped
+mentions count; a bare skill name in prose is indistinguishable from English, so
+the check stays quiet about those. A reference to a shelved skill is *not*
+flagged: explicit invocation is exactly what shelving is for.
 
 **Don't read overlap findings as conflicts.** Overlap is word similarity between
 descriptions — a hint to go read both files. Two skills can give flatly opposite
@@ -210,3 +223,10 @@ A skill can pass every check here and still never fire. Whether an agent actuall
 reaches for it on a given prompt requires running the agent — that's an eval, not
 an audit. A clean report means the skill is **discoverable and listed**, which is
 necessary and not sufficient.
+
+That eval is `route_check.py` in this repository. It hands a real model the
+pocket listing and a request and checks which skill comes back, graded by string
+equality against a JSONL of cases. It is a separate tool on purpose: it needs the
+`claude` CLI, costs tokens, takes seconds per call, and is non-deterministic —
+none of which the auditor is. Use `--repeat N` to measure how *reliably* a route
+holds, because a skill that wins two times in three is the finding.

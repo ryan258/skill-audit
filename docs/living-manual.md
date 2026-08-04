@@ -349,7 +349,13 @@ For every pair of discovered skills it:
 5. deduplicates the remaining terms into one set per skill; and
 6. intersects those sets.
 
-It also extracts quoted substrings and compares them exactly after lowercasing.
+It also extracts quoted substrings and compares them two ways: exactly after
+lowercasing, and for **containment** — a quoted phrase of two or more words that
+is a whole-word slice of a longer quoted phrase in the other skill. The shorter
+trigger covers every request the longer one names, so the pair is worth reading.
+Containment is a hint about model routing, never a verdict: which skill actually
+gets picked is the model's call over both full descriptions and the surrounding
+context, and this tool does not verify triggering.
 
 | Signal | Result |
 |---|---|
@@ -357,9 +363,10 @@ It also extracts quoted substrings and compares them exactly after lowercasing.
 | 3–4 shared distinctive terms | `NOTICE`, unless ownership escalation applies. |
 | 5+ shared distinctive terms | `WARNING`. |
 | Any identical quoted phrase | `WARNING`, regardless of word count. |
+| A quoted phrase of 2+ words wholly contained in another skill's quoted phrase | `NOTICE` (`intent_shadow`), one per phrase pair, regardless of term count. |
 
 The report includes `shared_terms`, `shared_term_count`,
-`shared_quoted_phrases`, and `suppressed` in JSON. In text it says “may overlap
+`shared_quoted_phrases`, `shadowed_phrases`, and `suppressed` in JSON. In text it says “may overlap
 — read both files,” never “these conflict.” When two copies have the same skill
 name, the display labels use real paths so the pair remains actionable — and a
 `suppress` entry for that pair must therefore be written with those paths,
@@ -450,6 +457,7 @@ on `code`, not message wording.
 | `intended_shelf_pocket` | Global pocket reality exceeds declared intent. |
 | `intended_pocket_shelf` | A declared pocket skill is not pocket. |
 | `intended_missing` | The configured intent names no installed skill. |
+| `dangling_reference` | A body references `skills/<name>/SKILL.md` that is not in the scanned library. |
 | `suppress_unmatched` | An `overlap.suppress` entry matched no detected pair. |
 | `config_error` | The TOML configuration could not be parsed, or a value in it is the wrong shape and was ignored. |
 
@@ -460,6 +468,7 @@ on `code`, not message wording.
 | `unknown_field` | Frontmatter contains a readable field outside the current recognized list. |
 | `late_job_noun` | First 100 description characters lack a distinctive non-vague term. |
 | `overlap` | A 3–4 distinctive-term match that was not escalated. |
+| `intent_shadow` | One quoted trigger phrase is a whole-word slice of another's. Never escalates: it cannot fail `--strict` on its own. |
 
 ## CLI contract
 
@@ -468,6 +477,7 @@ on `code`, not message wording.
 | `--repo PATH` | Add a repository to scan; repeat it for more repositories. |
 | `--config PATH` | Override `~/.skill-audit.toml`. |
 | `--json` | Write the complete report as JSON to stdout. It overrides `--quiet`. |
+| `--format github` | Emit one GitHub workflow command per finding for inline PR annotations, instead of the text report. `--json` wins over it. Never changes the exit code. |
 | `--markdown PATH` | Also write the full text report inside a Markdown code block at this exact path. |
 | `--quiet` | Suppress Inventory, Budget, and Pocket check in text output only. The output explicitly says they were suppressed. |
 | `--tool NAME` | Restrict scanning to `claude`, `codex`, `gemini`, or `antigravity`; repeatable. |
@@ -491,15 +501,15 @@ either.
 The top-level JSON object always contains:
 
 ```text
-meta, skills, findings, collisions, overlaps, budget, pocket_check,
-recommendations
+meta, skills, findings, collisions, overlaps, dangling_references, budget,
+pocket_check, recommendations
 ```
 
 `meta` records version, path-verification date, UTC scan timestamp, locations
 scanned, config location, and whether configuration was present. Each skill
 records its real path, source file, reachable locations, visible tools, per-tool
-states, line and character counts, description, scopes, precedence keys, and
-occurrences. The collision and overlap structures retain the evidence needed to
+states, line and character counts, description, scopes, precedence keys,
+references to other skills, and occurrences. The collision and overlap structures retain the evidence needed to
 review the high-level finding.
 
 Text output always includes Summary, Errors, Warnings, Notices, Name collisions,
@@ -521,8 +531,10 @@ action item with a count, not a pile of indistinguishable lines.
    Shared phrases are a review signal, not an intent model.
 3. **It does not modify, merge, relink, or repair skills.** Repairs remain a
    human decision.
-4. **It does not prove a trigger fires.** Run the target agent with a matching
-   prompt in a fresh session.
+4. **It does not prove a trigger fires.** That is a separate tool in this
+   repository: `route_check.py` hands a real model the pocket listing and checks
+   which skill comes back. It is deliberately not part of the auditor, which
+   stays offline, instant, and dependency-free.
 5. **It does not guess Gemini or Antigravity invocation mode.** UNKNOWN is the
    correct result when no documented signal exists.
 6. **It does not discover vendor-only or enterprise skills outside the scanned
@@ -631,6 +643,8 @@ audit lacks a documented state signal, not that a skill cannot be used.
   live library; it is not a general rulebook.
 - [skill-wiki.md](skill-wiki.md) — dated inventory and routing notes for the
   current installed skill library.
+- `route_check.py` — the routing harness: the model-in-the-loop counterpart to
+  this static auditor. See the README's Routing harness section.
 - [brief.md](../brief.md) — original implementation specification.
 
 ## Decision record: why the tool is conservative

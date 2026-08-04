@@ -214,7 +214,7 @@ That's the real end state. Getting to `--strict` clean and staying there is the 
 
 ## 7. Prove it fires
 
-The audit is static. It cannot tell you a skill will actually trigger — that requires running the agent, and it's an eval, not an audit.
+The audit is static. It cannot tell you a skill will actually trigger — that requires running the agent, and it's an eval, not an audit. That eval lives next to it: `python3 route_check.py cases/<name>.jsonl --repeat 3`.
 
 So: open a fresh session and use a **trigger phrase from the description**, never the skill name.
 
