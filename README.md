@@ -100,6 +100,13 @@ skills = ["startday", "session-handoff", "brand-voice"]
 "morning brief" = "startday"
 "public content" = "brand-voice"
 
+[overlap]
+# Mutes overlap pairs you have read and judged benign. An entry is a pair label
+# split on " / " exactly as the report prints it (real paths when two skills
+# share a name), or a bare skill name to mute every pair it appears in.
+# Muted pairs are still counted in the report; an entry matching nothing warns.
+suppress = ["idea-refine / interview-me", "interview-me / grill-me"]
+
 [budget]
 context_window = 200000
 ```

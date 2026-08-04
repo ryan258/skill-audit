@@ -57,12 +57,18 @@ FINDING_CODES = {
     "double_link", "non_portable_path", "mode_disagreement", "name_collision",
     "overlap", "budget_exceeded", "entry_cap_exceeded", "pocket_count",
     "intended_shelf_pocket", "intended_pocket_shelf", "intended_missing",
-    "config_error", "unreadable",
+    "config_error", "unreadable", "suppress_unmatched",
 }
 KNOWN_FIELDS = {
     "name", "description", "allowed-tools", "disable-model-invocation", "paths",
     "when_to_use", "license", "metadata", "compatibility", "argument-hint",
 }
+# Documented agents/openai.yaml blocks whose nested shape the one-level parser
+# cannot read. None of them affects invocation mode, so reporting them as
+# unparseable was noise about a correct file.
+CODEX_NESTED_BLOCKS = ("dependencies", "interface", "tools")
+# Overlap labels are joined with this, and config pair entries are split on it.
+PAIR_SEPARATOR = " / "
 BOOLS = {"true": True, "yes": True, "on": True, "1": True,
          "false": False, "no": False, "off": False, "0": False}
 
@@ -448,6 +454,7 @@ def classify_skill(real_path: str, entries: List[Dict[str, Any]], findings: List
             policy, policy_bad, _ = parse_frontmatter("---\n" + policy_text + "\n---\n", nested_policy=True)
         policy = policy or {}
         for field, line in policy_bad:
+            if field in CODEX_NESTED_BLOCKS: continue
             findings.append(finding("warning", "unparseable_field", "Unparseable Codex policy field '%s'" % field, name, real_path, line - 1 if synthetic_policy else line))
         policy_value = policy.get("policy", {}).get("allow_implicit_invocation") if isinstance(policy.get("policy"), dict) else None
         parsed_bool = bool_value(policy_value)
@@ -604,6 +611,19 @@ def collision_report(skills: List[Dict[str, Any]], findings: List[Dict[str, Any]
 
 def overlap_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     owners = set((config.get("ownership") or {}).values())
+    # A pair entry is split on the " / " separator the labels are printed with,
+    # not on any slash: a label is a real path when two skills share a name, and
+    # splitting on the first slash turned "/home/dup / /repo/dup" into nonsense
+    # that silently matched nothing.
+    suppressed_pairs, suppressed_names = set(), set()
+    for entry in (config.get("overlap") or {}).get("suppress", []):
+        entry = entry.strip()
+        if not entry: continue
+        if PAIR_SEPARATOR in entry:
+            suppressed_pairs.add(tuple(sorted(part.strip() for part in entry.split(PAIR_SEPARATOR, 1))))
+        else:
+            suppressed_names.add(entry)
+    used_pairs, used_names = set(), set()
     results = []
     for index, first in enumerate(skills):
         for second in skills[index + 1:]:
@@ -619,10 +639,26 @@ def overlap_report(skills: List[Dict[str, Any]], config: Dict[str, Any], finding
                 labels = [first["real_path"], second["real_path"]]
             else:
                 labels = [first["name"], second["name"]]
+
+            matched_pairs = {key for key in (tuple(sorted([first["name"], second["name"]])), tuple(sorted(labels)))
+                             if key in suppressed_pairs}
+            matched_names = {name for name in (first["name"], second["name"]) if name in suppressed_names}
+            used_pairs |= matched_pairs
+            used_names |= matched_names
+            is_suppressed = bool(matched_pairs or matched_names)
+
             item = {"skills": [first["name"], second["name"]], "labels": labels, "shared_terms": shared,
-                    "shared_term_count": count, "shared_quoted_phrases": phrases, "severity": severity}
+                    "shared_term_count": count, "shared_quoted_phrases": phrases, "severity": severity,
+                    "suppressed": is_suppressed}
             results.append(item)
-            findings.append(finding(severity, "overlap", "These two may overlap — read them (shared terms: %d)" % count, "%s / %s" % (labels[0], labels[1])))
+            if not is_suppressed:
+                findings.append(finding(severity, "overlap", "These two may overlap — read them (shared terms: %d)" % count, PAIR_SEPARATOR.join(labels)))
+    # A mute list that can rot invisibly is worse than no mute list: a renamed
+    # skill or a typo would otherwise stop suppressing and never say so.
+    stale = sorted(PAIR_SEPARATOR.join(pair) for pair in suppressed_pairs - used_pairs)
+    stale += sorted(suppressed_names - used_names)
+    for entry in stale:
+        findings.append(finding("warning", "suppress_unmatched", "Config suppresses an overlap that was not detected", entry))
     return results
 
 
@@ -749,7 +785,12 @@ def lines_for(report: Dict[str, Any], quiet: bool = False) -> List[str]:
                 verdict = resolution["note"] or "no winner"
             collisions.append("    %-8s %s" % (tool + ":", verdict))
     lines += section("Name collisions", collisions)
-    lines += section("Overlap candidates", ["%s / %s: %d shared distinctive terms (heuristic — read both files)" % (o["labels"][0], o["labels"][1], o["shared_term_count"]) for o in report["overlaps"]])
+    # A silently shorter section reads as "no overlaps", which is the one thing
+    # a mute list must never be able to imply.
+    overlaps = ["%s: %d shared distinctive terms (heuristic — read both files)" % (PAIR_SEPARATOR.join(o["labels"]), o["shared_term_count"]) for o in report["overlaps"] if not o.get("suppressed")]
+    muted = sum(1 for o in report["overlaps"] if o.get("suppressed"))
+    if muted: overlaps.append("%d suppressed by config" % muted)
+    lines += section("Overlap candidates", overlaps)
     if not quiet:
         budget = report["budget"]
         lines += section("Budget", [

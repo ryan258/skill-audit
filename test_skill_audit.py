@@ -299,6 +299,33 @@ def test_overlap_labels_disambiguate_two_copies_of_one_name():
     assert overlaps[0]["labels"] == ["/home/dup", "/repo/dup"], overlaps[0]["labels"]
 
 
+def test_overlap_suppression():
+    shared = "alpha bravo charlie delta echo foxtrot"
+    named = [{"name": "a", "real_path": "/x/a", "description": shared},
+             {"name": "b", "real_path": "/x/b", "description": shared}]
+    paths = [{"name": "dup", "real_path": "/home/dup", "description": shared},
+             {"name": "dup", "real_path": "/repo/dup", "description": shared}]
+
+    findings = []
+    assert sa.overlap_report(named, {"overlap": {"suppress": ["a / b"]}}, findings)[0]["suppressed"]
+    assert not findings, "a suppressed pair must not produce a finding: %s" % findings
+
+    # A label pair is two real paths when names collide. Splitting on the first
+    # slash instead of " / " matched nothing and suppressed nothing, silently.
+    findings = []
+    assert sa.overlap_report(paths, {"overlap": {"suppress": ["/home/dup / /repo/dup"]}}, findings)[0]["suppressed"]
+    assert not findings, "a path-labelled pair must be suppressible: %s" % findings
+
+    findings = []
+    sa.overlap_report(named, {"overlap": {"suppress": ["a / b", "gone / nope", "typo"]}}, findings)
+    stale = sorted(f["skill"] for f in findings if f["code"] == "suppress_unmatched")
+    assert stale == ["gone / nope", "typo"], stale
+
+    findings = []
+    assert not sa.overlap_report(named, {}, findings)[0]["suppressed"]
+    assert [f["code"] for f in findings] == ["overlap"], findings
+
+
 def test_project_skills_are_not_measured_against_the_global_config():
     skills = [{"name": "global-one", "scopes": ["global"], "states": {"claude": "POCKET"}},
               {"name": "repo-one", "scopes": ["nested"], "states": {"claude": "POCKET"}}]

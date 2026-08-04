@@ -282,6 +282,12 @@ skills = ["startday", "session-handoff", "brand-voice"]
 "morning brief" = "startday"
 "public content" = "brand-voice"
 
+[overlap]
+# Mutes overlap pairs you have read and judged benign. Entries are pair labels
+# split on " / ", exactly as the report prints them, or a bare skill name to
+# mute every pair that skill appears in. An entry matching nothing warns.
+suppress = ["idea-refine / interview-me", "interview-me / grill-me"]
+
 [budget]
 context_window = 200000
 ```
@@ -345,19 +351,37 @@ It also extracts quoted substrings and compares them exactly after lowercasing.
 | 5+ shared distinctive terms | `WARNING`. |
 | Any identical quoted phrase | `WARNING`, regardless of word count. |
 
-The report includes `shared_terms`, `shared_term_count`, and
-`shared_quoted_phrases` in JSON. In text it says “may overlap — read both
-files,” never “these conflict.” When two copies have the same skill name, the
-display labels use real paths so the pair remains actionable.
+The report includes `shared_terms`, `shared_term_count`,
+`shared_quoted_phrases`, and `suppressed` in JSON. In text it says “may overlap
+— read both files,” never “these conflict.” When two copies have the same skill
+name, the display labels use real paths so the pair remains actionable — and a
+`suppress` entry for that pair must therefore be written with those paths,
+joined by ` / `, the same separator the report prints.
 
 ### Intentional sharing versus accidental duplication
 
-The audit cannot presently tell those cases apart. A deliberately shared quoted
-trigger is still a warning because silently ignoring it would hide the failure
-mode the heuristic is intended to expose. The `ownership` mapping can only
-escalate a low-grade term match: a 3–4-term notice becomes a warning when neither
-skill is the declared owner of any job area. It does not suppress a warning or
-declare a trigger share intentional.
+The audit cannot tell those cases apart on its own, so the two configuration
+mechanisms work in opposite directions and neither guesses.
+
+`ownership` only escalates: a 3–4-term notice becomes a warning when neither
+skill is the declared owner of any job area. It never silences anything.
+
+`overlap.suppress` is the explicit human verdict, and it is the only thing that
+can mute a pair. The judgement stays with the person who read both files; the
+audit's job is to make the muting visible rather than to decide it. Three
+properties keep an audited mute list from becoming an unaudited one:
+
+- A muted pair still appears in JSON with `"suppressed": true`, and the text
+  report prints `N suppressed by config` under **Overlap candidates**. The
+  section never simply gets shorter.
+- An entry that matches nothing raises `suppress_unmatched`. A renamed skill or
+  a typo cannot quietly stop suppressing.
+- Suppression is scoped to what you name. A pair entry mutes one pair; a bare
+  skill name mutes every pair that skill appears in, including pairs formed by
+  skills added later — so prefer pair entries unless you mean the wide form.
+
+Suppress a pair only when you have read both files and can state the boundary in
+one sentence. Suppressing to clear a report is how the heuristic stops working.
 
 Treat an overlap result as a review queue. Keep two skills separate only when a
 user can express the boundary in one short sentence. Otherwise merge them, make
@@ -419,6 +443,7 @@ on `code`, not message wording.
 | `intended_shelf_pocket` | Global pocket reality exceeds declared intent. |
 | `intended_pocket_shelf` | A declared pocket skill is not pocket. |
 | `intended_missing` | The configured intent names no installed skill. |
+| `suppress_unmatched` | An `overlap.suppress` entry matched no detected pair. |
 | `config_error` | The TOML configuration could not be parsed. |
 
 ### Notices
@@ -472,7 +497,8 @@ review the high-level finding.
 
 Text output always includes Summary, Errors, Warnings, Notices, Name collisions,
 Overlap candidates, Recommended actions, and a path-stability note. Empty
-sections say `none found`; a section never disappears silently. Normal output
+sections say `none found`; a section never disappears silently, and a config-muted
+overlap is counted as `N suppressed by config` rather than dropped. Normal output
 also includes Inventory, Budget, and Pocket check. Quiet mode replaces those
 three with an explicit suppression message.
 

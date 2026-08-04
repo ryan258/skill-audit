@@ -182,12 +182,20 @@ purpose: a thin description shouldn't break a pipeline you didn't intend it to.
 
 **Don't filter on message text.** Filter on `code` — the messages are written for
 humans and will be reworded. The full list is `FINDING_CODES` at the top of
-`skill_audit.py` (25 codes).
+`skill_audit.py` (26 codes).
 
 **Don't read overlap findings as conflicts.** Overlap is word similarity between
 descriptions — a hint to go read both files. Two skills can give flatly opposite
 instructions in prose that shares no vocabulary, and this tool will never catch
 that. See `OVERLAP-REVIEW.md`.
+
+**Don't mute an overlap you haven't read.** `[overlap] suppress` in
+`~/.skill-audit.toml` takes pair labels exactly as the report prints them,
+separated by ` / ` — real paths when two skills share a name — or a bare skill
+name to mute every pair it appears in. Muted pairs are still counted in the
+report, and an entry that matches nothing is `suppress_unmatched`, so a renamed
+skill can't quietly stop suppressing. Suppressing to clear a report is how the
+heuristic stops working.
 
 **Don't trust the paths indefinitely.** `PATHS_VERIFIED` prints on every run.
 Codex has already moved once (`~/.codex/skills` → `~/.agents/skills`; both are
