@@ -6,7 +6,12 @@ does not want a pile of computer words thrown at them.
 ## The big idea
 
 Imagine you have several robot helpers. One is named Claude, one is Codex, one
-is Gemini, and one is Antigravity.
+is Gemini, and one is Antigravity. They all read booklets from the same shelf in
+your house.
+
+There is a fifth helper, Claude Desktop. It reads booklets from a shelf in the
+*cloud* instead. If you fix a booklet on the shelf in your house, that fifth
+helper still has the old one — you have to fix its copy too.
 
 Each robot can learn special jobs from tiny instruction booklets called
 **skills**. One booklet might say, “help plan a day.” Another might say, “help

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import glob
 import json
 import os
 import re
@@ -22,21 +23,43 @@ except ImportError:  # pragma: no cover - exercised on macOS Python 3.9/3.10
     tomllib = None
 
 VERSION = "1.0.0"
-PATHS_VERIFIED = "2026-08-01"
-# Paths verified August 1, 2026. Re-verify quarterly: vendors have moved them.
+PATHS_VERIFIED = "2026-08-04"
+# Re-verified 2026-08-04 against primary vendor sources, not summaries:
+#   Claude    code.claude.com/docs/en/skills  -> ~/.claude/skills, enterprise>personal>project
+#   Codex     learn.chatgpt.com/docs/build-skills -> $HOME/.agents/skills, /etc/codex/skills
+#   Gemini    github.com/google-gemini/gemini-cli docs/cli/using-agent-skills.md
+#   Antigravity  community write-ups only; still no vendor doc.
+# Re-verify quarterly: vendors have moved them.
 GLOBAL_PATHS = {
     "claude": ("~/.claude/skills",),
     # Codex moved to ~/.agents/skills, but the old path still holds installs on
     # any machine set up before the move, and scanning a missing directory costs
     # nothing. Dropping it made 26 real skills invisible on this machine.
-    "codex": ("~/.agents/skills", "~/.codex/skills"),
+    # /etc/codex/skills is the documented system/admin location. It is not on
+    # this machine, but scanning a missing directory costs nothing and an
+    # admin-installed skill you cannot see is exactly the failure this tool exists to catch.
+    "codex": ("~/.agents/skills", "~/.codex/skills", "/etc/codex/skills"),
     "gemini": ("~/.agents/skills", "~/.gemini/skills"),
     "antigravity": ("~/.gemini/config/skills",),
+    # Claude Desktop caches the account's synced skills under two identifiers it
+    # assigns, so the '*' segments are load-bearing — there is no fixed path.
+    # Observed on macOS 2026-08-04; this is one machine, not documentation, and
+    # it is a cache the app owns, so treat a miss as "not synced yet", never as
+    # "no skills". Linux/Windows equivalents are unverified and not listed.
+    "claude-desktop": (
+        "~/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/*/*/skills",
+    ),
 }
 ANTIGRAVITY_NON_PORTABLE = (
     "~/.gemini/antigravity/skills", "~/.gemini/antigravity-cli/skills"
 )
-TOOLS = ("claude", "codex", "gemini", "antigravity")
+TOOLS = ("claude", "codex", "gemini", "antigravity", "claude-desktop")
+# Skills only compete with others in the same listing. Claude Desktop's library
+# syncs from the account and never shares a listing with the local filesystem
+# one, so a name present in both is two libraries agreeing, not a collision —
+# and comparing their descriptions for overlap compares skills that can never
+# be offered to the same model at the same time.
+DESKTOP = "claude-desktop"
 CONTEXT_WINDOW_DEFAULT = 200000  # conservative default when config is absent
 CLAUDE_ENTRY_CAP = 1536
 CODEX_BUDGET_FRACTION = 0.02
@@ -287,6 +310,47 @@ def paths_under(root: Path) -> Tuple[List[Path], List[Path]]:
     return found, broken
 
 
+def expand_root(raw: str) -> List[Path]:
+    """Expand one configured location, which may be a glob.
+
+    A '*' means the vendor nests the directory under identifiers that cannot be
+    predicted, so every match is a real root. A pattern that matches nothing is
+    returned as-is so it still shows up in locations_scanned as 'not present' —
+    a location that silently vanishes from the summary is the one failure mode
+    this tool exists to prevent.
+    """
+    expanded = os.path.expanduser(raw)
+    if "*" not in expanded: return [Path(expanded)]
+    matches = sorted(glob.glob(expanded))
+    return [Path(match) for match in matches] if matches else [Path(expanded)]
+
+
+def desktop_states(skill_dir: Path) -> Optional[bool]:
+    """Claude Desktop's per-skill 'enabled' flag, from the sibling manifest.
+
+    This is Desktop's equivalent of disable-model-invocation, and reading it
+    beats assuming POCKET: the field demonstrably exists, so guessing would be
+    the same mistake as guessing Gemini's mode instead of reporting UNKNOWN.
+    Returns None when the manifest is missing or unreadable, which the caller
+    reports as UNKNOWN. Only a literal JSON boolean counts: an entry with no
+    'enabled' key, or a truthy stand-in like "true" or 1, is an absent signal,
+    and coercing it with bool() would silently invent SHELF for a skill whose
+    mode the manifest never stated.
+    """
+    manifest = skill_dir.parent.parent / "manifest.json"
+    text, error = safe_read(manifest)
+    if error or not text: return None
+    try:
+        entries = json.loads(text).get("skills", [])
+    except (ValueError, AttributeError):
+        return None
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("name") == skill_dir.name:
+            enabled = entry.get("enabled")
+            return enabled if isinstance(enabled, bool) else None
+    return None
+
+
 def path_family(root: Path) -> str:
     """Which cupboard a root belongs to: .agents, .gemini, .claude, .codex, or other.
 
@@ -515,14 +579,20 @@ def classify_skill(real_path: str, entries: List[Dict[str, Any]], findings: List
             findings.append(finding("warning", "unparseable_field", "Invalid boolean allow_implicit_invocation", name, real_path))
         codex_shelf = parsed_bool is False
     visible = {entry["tool"] for entry in entries}
+    desktop_enabled = desktop_states(skill_dir) if DESKTOP in visible else None
     states = {}
     for tool in TOOLS:
         if tool not in visible: continue
-        states[tool] = ("SHELF" if claude_shelf else "POCKET") if tool == "claude" else (("SHELF" if codex_shelf else "POCKET") if tool == "codex" else "UNKNOWN")
+        if tool == "claude": states[tool] = "SHELF" if claude_shelf else "POCKET"
+        elif tool == "codex": states[tool] = "SHELF" if codex_shelf else "POCKET"
+        elif tool == DESKTOP:
+            states[tool] = "UNKNOWN" if desktop_enabled is None else ("POCKET" if desktop_enabled else "SHELF")
+        else: states[tool] = "UNKNOWN"
     known = {state for state in states.values() if state != "UNKNOWN"}
     if len(known) > 1:
         findings.append(finding("warning", "mode_disagreement", "Tools disagree on invocation mode", name, real_path))
     return {"name": name, "real_path": real_path, "file": str(skill_dir / "SKILL.md"),
+            "library": DESKTOP if DESKTOP in visible else "local",
             "reachable_from": sorted({entry["source"] for entry in entries}), "tools": sorted(visible),
             "states": states, "line_count": line_count, "character_count": len(text or ""),
             "description": description, "nested": any(entry["nested"] for entry in entries),
@@ -539,9 +609,10 @@ def build_report(args: argparse.Namespace) -> Dict[str, Any]:
     for tool in TOOLS:
         if tool not in selected: continue
         for raw in GLOBAL_PATHS[tool]:
-            root = Path(os.path.expanduser(raw)); locations.append({"path": str(root), "status": "present" if root.exists() else "not present"})
-            records, problems = scan_root(root, tool, "global")
-            entries.extend(records); findings.extend(problems)
+            for root in expand_root(raw):
+                locations.append({"path": str(root), "status": "present" if root.exists() else "not present"})
+                records, problems = scan_root(root, tool, "global")
+                entries.extend(records); findings.extend(problems)
     if "antigravity" in selected:
         for raw in ANTIGRAVITY_NON_PORTABLE:
             root = Path(os.path.expanduser(raw)); locations.append({"path": str(root), "status": "present" if root.exists() else "not present"})
@@ -604,14 +675,21 @@ def build_report(args: argparse.Namespace) -> Dict[str, Any]:
 # overrides project." Note this is the OPPOSITE of Claude's *settings*
 # precedence (where project beats user) — do not "fix" it to match settings.
 # Plugin skills are namespaced plugin-name:skill-name and cannot collide, so
-# they need no rank. Docs do not state nested-vs-project ordering, so both hold
-# rank 3 and a nested/project pair correctly reports as an undeterminable tie.
+# they need no rank. Nested skills hold rank 3 alongside project skills, but a
+# nested/project pair is NOT an unresolvable tie: re-verified 2026-08-04, the
+# docs state a clashing nested skill stays available under a path-prefixed name
+# ("apps/web/.claude/skills/deploy" -> /apps/web:deploy), so both load. The tie
+# note says so rather than claiming no winner can be determined.
 #
 # Gemini: workspace > user > extension > built-in (documented rules).
-# WITHIN a tier, .agents/skills beats .gemini/skills (observed via community
-# testing; .agents is the cross-agent standard path and .gemini is the vendor
-# alias). Extension and built-in skills do not live in a scanned path, so they
-# never rank here.
+# WITHIN a tier, .agents/skills beats .gemini/skills. Re-checked 2026-08-04: the
+# vendor doc calls the two "aliases" and states no within-tier order, so this
+# stays an observation, NOT a documented rule. The evidence is first-party
+# runtime output rather than community report -- `gemini skills list --all`
+# prints e.g. "Skill conflict detected: <name> from ~/.agents/skills/... is
+# overriding the same skill from ~/.gemini/skills/...", naming the direction.
+# Extension and built-in skills do not live in a scanned path, so they never
+# rank here.
 # "non-portable" is an Antigravity-only label and never reaches these tables.
 PRECEDENCE = {
     "claude": {"claude:global": (2, "personal"),
@@ -621,6 +699,7 @@ PRECEDENCE = {
                "agents:global": (3, "user"), "gemini:global": (4, "user")},
 }
 PRECEDENCE_TEXT = {"claude": "enterprise > personal > project",
+                   "claude-desktop": "separate account-synced library; names are unique server-side",
                    "gemini": "workspace > user > extension > built-in",
                    "codex": "no precedence rule; both entries can appear in the picker"}
 
@@ -647,6 +726,13 @@ def collision_winner(tool: str, group: List[Dict[str, Any]]) -> Dict[str, Any]:
     best = min(rank for rank, _ in ranked)
     top = [skill for rank, skill in ranked if rank == best]
     if len(top) > 1:
+        # A Claude project/nested pair is a documented coexistence, not a tie:
+        # the nested copy stays available under a path-prefixed name, so saying
+        # "no winner" would send you hunting for a conflict that does not exist.
+        keys = {key for skill in top for key in skill["precedence_keys"]}
+        if tool == "claude" and {"claude:project", "claude:nested"} <= keys:
+            return {"winner": None, "tier": best[1], "tied": [s["real_path"] for s in top],
+                    "note": "both load — the nested copy is namespaced <path>:<name>"}
         return {"winner": None, "tier": best[1], "tied": [s["real_path"] for s in top],
                 "note": "same tier — winner not determinable from documented rules"}
     return {"winner": top[0]["real_path"], "tier": best[1], "tied": [], "note": ""}
@@ -654,9 +740,12 @@ def collision_winner(tool: str, group: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def collision_report(skills: List[Dict[str, Any]], findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     by_name: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    for skill in skills: by_name[skill["name"]].append(skill)
+    # Grouped per library: a name in both the local library and the Desktop one
+    # is the same skill synced two ways, not two skills fighting over a listing,
+    # and no precedence rule relates them because they never meet.
+    for skill in skills: by_name[(skill.get("library", "local"), skill["name"])].append(skill)
     results = []
-    for name, group in sorted(by_name.items()):
+    for (_, name), group in sorted(by_name.items()):
         if len(group) < 2: continue
         resolution = {tool: collision_winner(tool, group) for tool in ("claude", "gemini", "codex")}
         results.append({"name": name,
@@ -686,6 +775,9 @@ def overlap_report(skills: List[Dict[str, Any]], config: Dict[str, Any], finding
     results = []
     for index, first in enumerate(skills):
         for second in skills[index + 1:]:
+            # Two skills that are never offered to the same model at the same
+            # time cannot shadow each other, whatever they share.
+            if first.get("library", "local") != second.get("library", "local"): continue
             shared = sorted(description_tokens(first["description"]) & description_tokens(second["description"]))
             phrases = sorted(quoted_phrases(first["description"]) & quoted_phrases(second["description"]))
             shadows = phrase_shadows(first["description"], second["description"])
@@ -773,17 +865,21 @@ def budget_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings
     window = int((config.get("budget") or {}).get("context_window", CONTEXT_WINDOW_DEFAULT))
     result = {"context_window": window, "claude": {"total": 0, "limit": int(window * CLAUDE_BUDGET_FRACTION), "pocket_skills": 0},
               "codex": {"total": 0, "limit": min(8000, int(window * CODEX_BUDGET_FRACTION)), "pocket_skills": 0},
+              # Counted but not judged: no published listing budget exists for
+              # Desktop, and inventing a limit would manufacture a pass/fail the
+              # vendor never stated. The total is the useful part.
+              DESKTOP: {"total": 0, "limit": None, "pocket_skills": 0, "status": "not measured"},
               "excluded_unknown": 0}
     for skill in skills:
         chars = len(skill["name"]) + len(skill["description"])
         # Each tool's budget counts only what that tool can see. A skill being
         # UNKNOWN in Gemini says nothing about Claude's or Codex's listing.
-        for tool in ("claude", "codex"):
+        for tool in ("claude", "codex", DESKTOP):
             if skill["states"].get(tool) == "POCKET":
                 result[tool]["total"] += chars
                 result[tool]["pocket_skills"] += 1
         # Excluded entirely: no tool with a readable invocation mode can see it.
-        if not {"claude", "codex"} & set(skill["states"]) and "UNKNOWN" in skill["states"].values():
+        if not {"claude", "codex", DESKTOP} & set(skill["states"]) and "UNKNOWN" in skill["states"].values():
             result["excluded_unknown"] += 1
         if "claude" in skill["states"] and chars > CLAUDE_ENTRY_CAP:
             findings.append(finding("warning", "entry_cap_exceeded", "Claude listing entry exceeds %d characters" % CLAUDE_ENTRY_CAP, skill["name"], skill["real_path"]))
@@ -908,6 +1004,7 @@ def lines_for(report: Dict[str, Any], quiet: bool = False) -> List[str]:
         lines += section("Budget", [
             "Claude: %(total)d/%(limit)d chars across %(pocket_skills)d pocket skills (%(status)s)" % budget["claude"],
             "Codex:  %(total)d/%(limit)d chars across %(pocket_skills)d pocket skills (%(status)s)" % budget["codex"],
+            "Desktop: %(total)d chars across %(pocket_skills)d enabled skills (%(status)s — no published limit)" % budget[DESKTOP],
             "%d skills excluded: only Gemini/Antigravity can see them, and their mode is UNKNOWN" % budget["excluded_unknown"]])
         pocket = report["pocket_check"]
         lines += section("Pocket check", ["rule: %s" % pocket["rule"],

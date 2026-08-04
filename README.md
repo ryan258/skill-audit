@@ -34,7 +34,9 @@ The report uses three words consistently. They're this tool's terms, not vendor 
 
 **Per skill** — frontmatter parses; `description` present; `name` matches the directory; description length, trigger language, vagueness, front-loading; body over 500 lines; invocation mode *per tool* (`disable-model-invocation` for Claude, `agents/openai.yaml` → `policy.allow_implicit_invocation` for Codex).
 
-**Across skills** — name collisions (every location, plus which copy actually wins under each tool's documented precedence, plus Gemini's within-tier preference for `.agents/skills` over `.gemini/skills` — community-observed, not vendor-documented), description overlap candidates, trigger-phrase containment (one quoted trigger is a whole-word slice of another — a hint that the pair competes, not proof that either is unreachable; which one gets picked is the model's call), dangling `skills/<name>/SKILL.md` references to skills that aren't installed, context-budget math, and intended-vs-actual pocket count.
+**Claude Desktop** is scanned as a *separate library* — vendor-documented behavior: Cowork and cloud sessions do not read `~/.claude/skills/`, they load the skills enabled for your claude.ai account. Its skills sync from your account (including Anthropic's own built-ins), cached under two app-assigned identifiers, and its invocation mode comes from that cache's `manifest.json` `enabled` flag rather than `disable-model-invocation`. Because that library never shares a listing with your local one, name collisions and overlap are scoped per library — a skill present in both is two libraries agreeing, not a conflict. Its listing size is reported but not graded: no published budget exists, and inventing one would manufacture a verdict the vendor never stated.
+
+**Across skills** — name collisions (every location, plus which copy actually wins under each tool's documented precedence, plus Gemini's within-tier preference for `.agents/skills` over `.gemini/skills` — observed, not vendor-documented: re-checked 2026-08-04, the Gemini docs call the two "aliases" and state no within-tier order, but `gemini skills list --all` prints which path overrides which), description overlap candidates, trigger-phrase containment (one quoted trigger is a whole-word slice of another — a hint that the pair competes, not proof that either is unreachable; which one gets picked is the model's call), dangling `skills/<name>/SKILL.md` references to skills that aren't installed, context-budget math, and intended-vs-actual pocket count.
 
 Budgets are counted **per tool**: a skill shelved in Claude but pocket in Codex costs Codex's listing and not Claude's. The pocket check is deliberately broader — a skill counts as pocket if *any* tool that can see it will auto-invoke it — so the two numbers can legitimately disagree. Both print the rule they used.
 
@@ -51,8 +53,10 @@ Global (skipped quietly and marked "not present" if absent):
 | [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) | `~/.claude/skills/` |
 | [Codex](https://openai.com) + [Gemini CLI](https://gemini.google.com) | `~/.agents/skills/` |
 | [Codex](https://openai.com) (legacy) | `~/.codex/skills/` — still scanned; holds the installs on any machine set up before the move |
+| [Codex](https://openai.com) (system) | `/etc/codex/skills/` — the documented admin location |
 | [Gemini CLI](https://gemini.google.com) (alt) | `~/.gemini/skills/` |
 | [Antigravity](https://antigravity.google) | `~/.gemini/config/skills/` |
+| Claude Desktop | `~/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/*/*/skills` — macOS, globbed; a separate account-synced library |
 
 `~/.gemini/antigravity/skills/` and `~/.gemini/antigravity-cli/skills/` are also scanned and flagged **non-portable** — only `~/.gemini/config/skills/` is confirmed to work across all three Antigravity flavors.
 
@@ -70,7 +74,7 @@ A skill is any directory containing a `SKILL.md`.
 | `--format github` | Emit one GitHub workflow command per finding, for inline PR annotations, instead of the text report |
 | `--markdown PATH` | Also write a Markdown report to that path |
 | `--quiet` | Skip inventory, budget, and pocket check. Errors, warnings, notices, collisions, and overlaps still print. |
-| `--tool NAME` | Limit the scan to `claude`, `codex`, `gemini`, or `antigravity`. Repeatable. |
+| `--tool NAME` | Limit the scan to `claude`, `codex`, `gemini`, `antigravity`, or `claude-desktop`. Repeatable. |
 | `--strict` | Treat warnings as failures |
 | `--version` | Print version and the `PATHS_VERIFIED` date |
 
@@ -196,5 +200,5 @@ The `PATHS_VERIFIED` date prints on every run so this is hard to forget. **Re-ve
 - `docs/custom-openai-gpt-skill-instructions.md` — the same, for a Custom GPT (measured against the 8,000-character Instructions cap)
 - `docs/custom-gemini-skill-instructions.md` — the same, for a Gemini Gem
 - `docs/skill-wiki.md` — inventory, routing notes, and canonical-copy setup for installed skills
-- `skill-setup.md` — per-tool reference: wiring each of the four tools and verifying they see your skills
+- `skill-setup.md` — per-tool reference: wiring each of the four cupboard tools and verifying they see your skills (Claude Desktop is not wired this way — see `docs/library-model.md`)
 - `brief.md` — the build spec, including the YAML subset the hand-rolled frontmatter parser supports (plus multi-line plain scalars, which the spec omits but real skill files use)

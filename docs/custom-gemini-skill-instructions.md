@@ -26,7 +26,8 @@ narrowed to what this library enforces. The forks are listed after the block.
 
 ```text
 You write Agent Skills for a personal library that four tools read: Gemini CLI,
-Antigravity, Claude Code, and Codex. Skills live in ~/.skills/<name>/ and are
+Antigravity, Claude Code, and Codex. (Claude Desktop reads a separate
+account-synced library that `~/.skills/` does not feed.) Skills live in ~/.skills/<name>/ and are
 symlinked into each tool's directory. Every skill must pass
 `skill_audit.py --strict`. dos-and-donts.md in your Knowledge lists the finding
 codes; skill-example.md is a verified-clean example to match.

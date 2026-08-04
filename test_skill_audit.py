@@ -255,6 +255,7 @@ def test_findings_name_the_skill_when_there_is_no_path():
               "skills": [], "collisions": [], "overlaps": [],
               "budget": {"claude": {"total": 0, "limit": 1, "status": "pass", "pocket_skills": 0},
                          "codex": {"total": 0, "limit": 1, "status": "pass", "pocket_skills": 0},
+                         sa.DESKTOP: {"total": 0, "limit": None, "status": "not measured", "pocket_skills": 0},
                          "excluded_unknown": 0},
               "pocket_check": {"rule": "r", "pocket_count": 0, "correct": [],
                                "intended_shelf_but_pocket": [], "intended_pocket_but_shelf": []},
@@ -531,6 +532,79 @@ def test_github_format_emits_escaped_annotations():
         assert annotated, "skill findings must annotate the SKILL.md, not its directory"
         assert sa.gh_escape("a,b:c%d") == "a%2Cb%3Ac%25d", "property separators must not survive in a value"
         assert sa.gh_escape("a,b:c", data=True) == "a,b:c", "message data only escapes %% and newlines"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_desktop_invocation_mode_comes_from_the_manifest():
+    """Desktop's 'enabled' is its disable-model-invocation; guessing is not allowed."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        root = tmp / "global/claude-desktop"
+        for name in ("switched-off", "switched-on", "unlisted"):
+            write_skill(root, name, '---\nname: %s\ndescription: "Does a thing. Use when the user asks."\n---\nbody\n' % name)
+        # The manifest sits beside the skills directory, as it does on disk.
+        (tmp / "global/manifest.json").write_text(json.dumps({"skills": [
+            {"name": "switched-off", "enabled": False}, {"name": "switched-on", "enabled": True}]}), encoding="utf-8")
+        states = {s["name"]: s["states"]["claude-desktop"] for s in run(tmp, tool=["claude-desktop"])["skills"]}
+        assert states == {"switched-off": "SHELF", "switched-on": "POCKET", "unlisted": "UNKNOWN"}, states
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_desktop_absent_or_non_boolean_enabled_is_unknown_not_shelf():
+    """bool() coercion would invent SHELF for a mode the manifest never stated."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        root = tmp / "global/claude-desktop"
+        names = ("no-key", "string-true", "number-one", "null-value", "real-false")
+        for name in names:
+            write_skill(root, name, '---\nname: %s\ndescription: "Does a thing. Use when the user asks."\n---\nbody\n' % name)
+        (tmp / "global/manifest.json").write_text(json.dumps({"skills": [
+            {"name": "no-key"},                      # entry present, mode never stated
+            {"name": "string-true", "enabled": "true"},
+            {"name": "number-one", "enabled": 1},
+            {"name": "null-value", "enabled": None},
+            {"name": "real-false", "enabled": False}]}), encoding="utf-8")
+        states = {s["name"]: s["states"]["claude-desktop"] for s in run(tmp, tool=["claude-desktop"])["skills"]}
+        assert states == {"no-key": "UNKNOWN", "string-true": "UNKNOWN", "number-one": "UNKNOWN",
+                          "null-value": "UNKNOWN", "real-false": "SHELF"}, states
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_desktop_and_local_libraries_are_never_compared():
+    """A name synced to both is one skill in two libraries, not a collision."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        shared = '---\nname: %s\ndescription: "Alpha bravo charlie delta echo foxtrot. Use when the user asks."\n---\nbody\n'
+        write_skill(tmp / "global/claude", "dup", shared % "dup")
+        write_skill(tmp / "global/claude-desktop", "dup", shared % "dup")
+        # A control pair inside ONE library must still be caught, or this test
+        # would pass just as well against an overlap check that does nothing.
+        write_skill(tmp / "global/claude-desktop", "twin", shared % "twin")
+        report = run(tmp, tool=["claude", "claude-desktop"])
+        assert report["collisions"] == [], report["collisions"]
+        assert not any(f["code"] == "name_collision" for f in report["findings"])
+        pairs = {tuple(sorted(o["skills"])) for o in report["overlaps"]}
+        assert ("dup", "twin") in pairs, "same-library overlap must still fire: %s" % pairs
+        assert ("dup", "dup") not in pairs, "cross-library pair must not be compared: %s" % pairs
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_glob_location_reports_itself_when_it_matches_nothing():
+    """A location that vanishes from the summary is the failure this tool prevents."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        assert sa.expand_root(str(tmp / "*/skills")) == [Path(str(tmp / "*/skills"))]
+        (tmp / "abc/skills").mkdir(parents=True)
+        (tmp / "xyz/skills").mkdir(parents=True)
+        assert sa.expand_root(str(tmp / "*/skills")) == [tmp / "abc/skills", tmp / "xyz/skills"]
+        assert sa.expand_root(str(tmp / "abc/skills")) == [tmp / "abc/skills"], "a plain path is untouched"
     finally:
         shutil.rmtree(tmp)
 

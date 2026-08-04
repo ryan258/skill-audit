@@ -93,9 +93,10 @@ Missing locations are reported as `not present`, not errors.
 | Tool | Global locations scanned | Invocation state the audit can establish |
 |---|---|---|
 | Claude Code | `~/.claude/skills/` | POCKET or SHELF |
-| Codex | `~/.agents/skills/`, plus legacy `~/.codex/skills/` | POCKET or SHELF |
+| Codex | `~/.agents/skills/`, plus legacy `~/.codex/skills/` and system `/etc/codex/skills/` | POCKET or SHELF |
 | Gemini CLI | `~/.agents/skills/`, `~/.gemini/skills/` | UNKNOWN |
 | Antigravity | `~/.gemini/config/skills/` | UNKNOWN |
+| Claude Desktop | `~/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/*/*/skills` (macOS, globbed) | POCKET or SHELF, from the cache manifest's `enabled` flag |
 
 The scanner also checks `~/.gemini/antigravity/skills/` and
 `~/.gemini/antigravity-cli/skills/`. If either contains skills, the skills are
@@ -220,6 +221,27 @@ The early-signal check is intentionally simpler than grammatical part-of-speech
 analysis: it looks for distinctive tokens after removing stopwords and vague
 words. It does not claim to identify a literal noun.
 
+## The two libraries
+
+The tool scans two libraries that never meet. The **local** one is the four
+filesystem cupboards (`.claude`, `.agents`, `.gemini`, `.codex`). The
+**claude-desktop** one is the account-synced set the desktop app caches under
+two identifiers it assigns, so its configured location contains `*` segments
+and is expanded by glob; a pattern matching nothing is still listed as *not
+present*, because a location that silently disappears from the summary is the
+failure this tool exists to prevent.
+
+Every comparison between skills is scoped to one library. A name in both is
+one skill synced two ways, not a collision, and no documented precedence rule
+relates them because they are never offered to the same model at once. On the
+reference machine nine names appear in both libraries and produce zero
+collisions; without the scoping they would be nine false ones.
+
+Desktop invocation mode is read from the cache's `manifest.json` `enabled`
+flag — Desktop's equivalent of `disable-model-invocation`. A skill absent from
+the manifest, or an unreadable manifest, yields UNKNOWN rather than an assumed
+POCKET. That path is one machine's observation, not vendor documentation.
+
 ## Per-tool invocation mode
 
 The same physical skill can be visible to several tools and have a different
@@ -330,7 +352,11 @@ the result separately for each tool.
 The Claude ordering is specifically skill precedence, not Claude settings
 precedence. The two are opposite in a personal-versus-project conflict. The
 Gemini within-tier `.agents` preference is treated as observed project knowledge,
-not vendor-documented behavior.
+not vendor-documented behavior. Re-checked 2026-08-04 against
+`docs/cli/using-agent-skills.md`: the vendor calls the two paths "aliases" and
+states no order between them, so the label stands. The supporting evidence is now
+first-party runtime output rather than community report — `gemini skills list
+--all` prints which path overrides which.
 
 ## Overlap candidates: exactly what is detected
 
@@ -480,7 +506,7 @@ on `code`, not message wording.
 | `--format github` | Emit one GitHub workflow command per finding for inline PR annotations, instead of the text report. `--json` wins over it. Never changes the exit code. |
 | `--markdown PATH` | Also write the full text report inside a Markdown code block at this exact path. |
 | `--quiet` | Suppress Inventory, Budget, and Pocket check in text output only. The output explicitly says they were suppressed. |
-| `--tool NAME` | Restrict scanning to `claude`, `codex`, `gemini`, or `antigravity`; repeatable. |
+| `--tool NAME` | Restrict scanning to `claude`, `codex`, `gemini`, `antigravity`, or `claude-desktop`; repeatable. |
 | `--strict` | Turn warnings into exit status 1. |
 | `--version` | Print version and `PATHS_VERIFIED`, then exit. |
 

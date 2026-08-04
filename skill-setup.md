@@ -30,7 +30,7 @@ Keep every skill in one directory. Point each tool at it. Never copy.
     └── SKILL.md
 ```
 
-Then each tool's skills directory holds symlinks (or per-tool links) back to that source. Edit once, all four tools see the change.
+Then each tool's skills directory holds symlinks (or per-tool links) back to that source. Edit once, all four of those tools see the change. **Claude Desktop does not** — it reads a separate library synced from your account, so a `~/.skills/` edit never reaches it. Change that copy in the app: Settings → Skills → the skill → Replace.
 
 `skill_audit.py` resolves every symlink and deduplicates by real path, so a skill reachable from four tools reports as **one** entry with four reachable-from paths — not four skills.
 
@@ -72,7 +72,7 @@ gemini skills link ~/.skills/brand-voice
 ```sh
 gemini skills list --all
 ```
-This is the most useful verification command of any of the four tools. It prints every discovered skill with `[Enabled]` / `[Disabled]`, the description, and the resolved file location. If your skill isn't in that output, Gemini cannot see it — nothing else matters until that's fixed.
+This is the most useful verification command of any of the CLI tools. It prints every discovered skill with `[Enabled]` / `[Disabled]`, the description, and the resolved file location. If your skill isn't in that output, Gemini cannot see it — nothing else matters until that's fixed.
 
 **Shelf a skill:** there is no shelf. `gemini skills disable <name>` exists but it's a blunter instrument — it removes the skill from consideration entirely rather than making it explicit-invocation-only. `skill_audit.py` reports Gemini state as `UNKNOWN` for this reason, and excludes those skills from budget math.
 
@@ -139,16 +139,27 @@ This is the only global path confirmed to work across all three Antigravity flav
 
 ## Current state of this machine
 
-Checked August 1, 2026:
+Checked August 4, 2026:
 
 | Tool | Installed | Sees your skills? |
 |---|---|---|
-| Claude Code | yes | **yes** — 26 skills |
-| Gemini CLI | yes | **no** — 2 built-ins only |
-| Codex | binary missing | **no** — can't run |
-| Antigravity | not installed | n/a |
+| Claude Code | yes | **yes** — 28 skills |
+| Gemini CLI | yes | **yes** — 28 skills (30 rows incl. built-ins) |
+| Codex | yes | **yes** — 58 skills (also reads `~/.codex/skills`) |
+| Antigravity | path present | 28 skills discoverable; mode UNKNOWN |
+| Claude Desktop | yes | **yes** — from its own account-synced library (count omitted on purpose, see below) |
 
-`~/.skills/` holds 22 skills. Only Claude Code is wired to it. `~/.agents/skills/`, `~/.gemini/skills/`, and `~/.gemini/config/skills/` are all absent, so three of the four tools see nothing.
+`~/.skills/` holds 29 skills, and all four cupboard paths — `~/.claude/skills/`,
+`~/.agents/skills/`, `~/.gemini/skills/`, `~/.gemini/config/skills/` — now exist
+and resolve to it. The wiring below is what got them there; it is kept as the
+recipe, not as a description of a broken machine.
+
+Claude Desktop's skills are a **separate library** and are not served by any of
+that wiring. See [docs/library-model.md](docs/library-model.md). No count is
+recorded here: that library syncs from your account and changes without a local
+edit — it gained a skill mid-session while this page was being written. For the
+current number run `python3 skill_audit.py --tool claude-desktop`, or read the
+regenerated [skill wiki](docs/skill-wiki.md), which is dated for that reason.
 
 To fix Gemini:
 ```sh

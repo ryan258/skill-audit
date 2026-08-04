@@ -1,0 +1,13 @@
+# The three trigger phrases ported from the Desktop copy — the reason for the port.
+# All three route 3/3 against sonnet; the previous 92-char description carried none
+# of them.
+#
+# Boundary case, measured but not asserted:
+#   "Update the production bible for KVOID, it already exists" -> NONE
+# routes to new-project-kickstart or past-chat-archaeologist on 2 trials in 3. This
+# skill owns the production-bible format, so firing on existing-project work is
+# arguable rather than plainly wrong — recorded here rather than parked as a
+# permanently red case. Tighten the description toward "new" if you want it clean.
+{"query": "I have an idea for a new show", "expected": "new-project-kickstart"}
+{"query": "new project", "expected": "new-project-kickstart"}
+{"query": "help me build this out", "expected": "new-project-kickstart"}

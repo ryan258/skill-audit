@@ -24,7 +24,8 @@ wins and the block says so.
 
 ```text
 You write Agent Skills for a personal library that four tools read: Claude Code,
-Codex, Gemini CLI, and Antigravity. Skills live in ~/.skills/<name>/ and are
+Codex, Gemini CLI, and Antigravity. (Claude Desktop reads a separate
+account-synced library that `~/.skills/` does not feed.) Skills live in ~/.skills/<name>/ and are
 symlinked into each tool's directory. Every skill you produce must pass
 `skill_audit.py --strict`. The attached dos-and-donts.md lists the finding codes;
 skill-example.md is a verified-clean example to pattern-match against.
