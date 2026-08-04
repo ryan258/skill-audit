@@ -34,7 +34,7 @@ The report uses three words consistently. They're this tool's terms, not vendor 
 
 **Per skill** — frontmatter parses; `description` present; `name` matches the directory; description length, trigger language, vagueness, front-loading; body over 500 lines; invocation mode *per tool* (`disable-model-invocation` for Claude, `agents/openai.yaml` → `policy.allow_implicit_invocation` for Codex).
 
-**Across skills** — name collisions (every location, plus which copy actually wins under each tool's documented precedence, plus Gemini's within-tier preference for `.agents/skills` over `.gemini/skills` — community-observed, not vendor-documented), description overlap candidates, context-budget math, and intended-vs-actual pocket count.
+**Across skills** — name collisions (every location, plus which copy actually wins under each tool's documented precedence, plus Gemini's within-tier preference for `.agents/skills` over `.gemini/skills` — community-observed, not vendor-documented), description overlap candidates, trigger-phrase containment (one quoted trigger is a whole-word slice of another — a hint that the pair competes, not proof that either is unreachable; which one gets picked is the model's call), dangling `skills/<name>/SKILL.md` references to skills that aren't installed, context-budget math, and intended-vs-actual pocket count.
 
 Budgets are counted **per tool**: a skill shelved in Claude but pocket in Codex costs Codex's listing and not Claude's. The pocket check is deliberately broader — a skill counts as pocket if *any* tool that can see it will auto-invoke it — so the two numbers can legitimately disagree. Both print the rule they used.
 
@@ -67,13 +67,14 @@ A skill is any directory containing a `SKILL.md`.
 | `--repo PATH` | Add a repo to scan. Repeatable. |
 | `--config PATH` | Use a specific config file (default `~/.skill-audit.toml`) |
 | `--json` | Emit the full report as JSON instead of text |
+| `--format github` | Emit one GitHub workflow command per finding, for inline PR annotations, instead of the text report |
 | `--markdown PATH` | Also write a Markdown report to that path |
 | `--quiet` | Skip inventory, budget, and pocket check. Errors, warnings, notices, collisions, and overlaps still print. |
 | `--tool NAME` | Limit the scan to `claude`, `codex`, `gemini`, or `antigravity`. Repeatable. |
 | `--strict` | Treat warnings as failures |
 | `--version` | Print version and the `PATHS_VERIFIED` date |
 
-`--json` overrides `--quiet` — JSON is always the full structure. `--markdown` always writes the full report. `--quiet` changes what prints, never the exit code.
+`--json` overrides `--format` and `--quiet` — JSON is always the full structure. `--markdown` always writes the full report. `--quiet` changes what prints, never the exit code.
 
 ## Exit codes
 
@@ -113,7 +114,7 @@ context_window = 200000
 
 ## JSON output
 
-Top-level keys: `meta`, `skills`, `findings`, `collisions`, `overlaps`, `budget`, `pocket_check`, `recommendations`. Every finding carries `severity` (`error`/`warning`/`notice`), a stable `code`, `skill`, `path`, and `message` — filter on `code`, not the human text. The code list is a constant at the top of `skill_audit.py`.
+Top-level keys: `meta`, `skills`, `findings`, `collisions`, `overlaps`, `dangling_references`, `budget`, `pocket_check`, `recommendations`. Every finding carries `severity` (`error`/`warning`/`notice`), a stable `code`, `skill`, `path`, and `message` — filter on `code`, not the human text. The code list is a constant at the top of `skill_audit.py`.
 
 ## Sample
 

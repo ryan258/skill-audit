@@ -57,8 +57,12 @@ FINDING_CODES = {
     "double_link", "non_portable_path", "mode_disagreement", "name_collision",
     "overlap", "budget_exceeded", "entry_cap_exceeded", "pocket_count",
     "intended_shelf_pocket", "intended_pocket_shelf", "intended_missing",
-    "config_error", "unreadable", "suppress_unmatched",
+    "config_error", "unreadable", "suppress_unmatched", "dangling_reference",
+    "intent_shadow",
 }
+# A body pointing at another skill's file. Only path-shaped mentions count: a
+# bare skill name in prose is indistinguishable from ordinary English.
+REFERENCE_RE = re.compile(r"\bskills/([A-Za-z0-9][\w.-]*)/SKILL\.md", re.I)
 KNOWN_FIELDS = {
     "name", "description", "allowed-tools", "disable-model-invocation", "paths",
     "when_to_use", "license", "metadata", "compatibility", "argument-hint",
@@ -522,6 +526,7 @@ def classify_skill(real_path: str, entries: List[Dict[str, Any]], findings: List
             "reachable_from": sorted({entry["source"] for entry in entries}), "tools": sorted(visible),
             "states": states, "line_count": line_count, "character_count": len(text or ""),
             "description": description, "nested": any(entry["nested"] for entry in entries),
+            "references": sorted(set(REFERENCE_RE.findall(text or "")) - {name}),
             "scopes": sorted({entry["label"] for entry in entries}),
             "precedence_keys": sorted({entry["precedence_key"] for entry in entries}),
             "occurrences": sorted({(entry["tool"], entry["label"], entry["source"]) for entry in entries})}
@@ -573,6 +578,7 @@ def build_report(args: argparse.Namespace) -> Dict[str, Any]:
     for problem in config_problems:
         findings.append(finding("warning", "config_error", "Ignoring malformed config value: %s" % problem, path=str(config_path)))
     collisions = collision_report(skills, findings)
+    dangling = reference_report(skills, findings)
     overlaps = overlap_report(skills, config, findings)
     budget = budget_report(skills, config, findings)
     pocket = pocket_report(skills, config, findings)
@@ -581,6 +587,7 @@ def build_report(args: argparse.Namespace) -> Dict[str, Any]:
                       "scan_timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
                       "locations_scanned": locations, "config": str(config_path), "config_present": config_path.exists()},
             "skills": skills, "findings": findings, "collisions": collisions, "overlaps": overlaps,
+            "dangling_references": dangling,
             "budget": budget, "pocket_check": pocket, "recommendations": recommendations}
 
 
@@ -681,8 +688,9 @@ def overlap_report(skills: List[Dict[str, Any]], config: Dict[str, Any], finding
         for second in skills[index + 1:]:
             shared = sorted(description_tokens(first["description"]) & description_tokens(second["description"]))
             phrases = sorted(quoted_phrases(first["description"]) & quoted_phrases(second["description"]))
+            shadows = phrase_shadows(first["description"], second["description"])
             count = len(shared)
-            if count <= 2 and not phrases: continue
+            if count <= 2 and not phrases and not shadows: continue
             first_states = first.get("states") or {t: "POCKET" for t in TOOLS}
             second_states = second.get("states") or {t: "POCKET" for t in TOOLS}
             both_pocket = any(first_states.get(t) == "POCKET" and second_states.get(t) == "POCKET" for t in TOOLS)
@@ -707,10 +715,15 @@ def overlap_report(skills: List[Dict[str, Any]], config: Dict[str, Any], finding
 
             item = {"skills": [first["name"], second["name"]], "labels": labels, "shared_terms": shared,
                     "shared_term_count": count, "shared_quoted_phrases": phrases, "severity": severity,
-                    "suppressed": is_suppressed}
+                    "shadowed_phrases": shadows, "suppressed": is_suppressed}
             results.append(item)
             if not is_suppressed:
-                findings.append(finding(severity, "overlap", "These two may overlap — read them (shared terms: %d)" % count, PAIR_SEPARATOR.join(labels)))
+                if count > 2 or phrases:
+                    findings.append(finding(severity, "overlap", "These two may overlap — read them (shared terms: %d)" % count, PAIR_SEPARATOR.join(labels)))
+                for shorter, longer in shadows:
+                    findings.append(finding("notice", "intent_shadow",
+                                            "Trigger '%s' is contained in '%s' — read both (routing is the model's call, not a rule)" % (shorter, longer),
+                                            PAIR_SEPARATOR.join(labels)))
     # A mute list that can rot invisibly is worse than no mute list: a renamed
     # skill or a typo would otherwise stop suppressing and never say so.
     stale = sorted(PAIR_SEPARATOR.join(pair) for pair in suppressed_pairs - used_pairs)
@@ -718,6 +731,42 @@ def overlap_report(skills: List[Dict[str, Any]], config: Dict[str, Any], finding
     for entry in stale:
         findings.append(finding("warning", "suppress_unmatched", "Config suppresses an overlap that was not detected", entry))
     return results
+
+
+def reference_report(skills: List[Dict[str, Any]], findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Skill bodies that point at a SKILL.md no longer in the scanned library.
+
+    A rename or a delete rots these silently. Only missing targets are reported:
+    a reference to a SHELF skill is the correct pattern, not a fault — explicit
+    invocation is exactly what a shelved skill is for.
+    """
+    known = {skill["name"] for skill in skills}
+    dangling = []
+    for skill in skills:
+        for target in skill["references"]:
+            if target in known: continue
+            dangling.append({"skill": skill["name"], "missing": target})
+            findings.append(finding("warning", "dangling_reference",
+                                    "Body references skills/%s/SKILL.md, which is not in the scanned library" % target,
+                                    skill["name"], skill["real_path"]))
+    return dangling
+
+
+def phrase_shadows(one: str, other: str) -> List[List[str]]:
+    """Quoted trigger phrases where one is a whole-word slice of the other.
+
+    A hint, not a verdict: the shorter trigger covers every request the longer
+    one names, so the pair is worth reading. Which skill actually gets picked is
+    the model's call over both full descriptions and the surrounding context —
+    this tool does not verify triggering, so containment cannot show that either
+    skill is unreachable. Single-word phrases are excluded: they match far too
+    much to say anything.
+    """
+    first, second = quoted_phrases(one), quoted_phrases(other)
+    pairs = [(a, b) for a in first for b in second] + [(a, b) for a in second for b in first]
+    return [list(pair) for pair in sorted({
+        (shorter, longer) for shorter, longer in pairs
+        if shorter != longer and len(shorter.split()) >= 2 and " %s " % shorter in " %s " % longer})]
 
 
 def budget_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -845,7 +894,12 @@ def lines_for(report: Dict[str, Any], quiet: bool = False) -> List[str]:
     lines += section("Name collisions", collisions)
     # A silently shorter section reads as "no overlaps", which is the one thing
     # a mute list must never be able to imply.
-    overlaps = ["%s: %d shared distinctive terms (heuristic — read both files)" % (PAIR_SEPARATOR.join(o["labels"]), o["shared_term_count"]) for o in report["overlaps"] if not o.get("suppressed")]
+    overlaps = []
+    for item in report["overlaps"]:
+        if item.get("suppressed"): continue
+        overlaps.append("%s: %d shared distinctive terms (heuristic — read both files)" % (PAIR_SEPARATOR.join(item["labels"]), item["shared_term_count"]))
+        overlaps.extend("    trigger '%s' is contained in '%s' (heuristic — read both files)" % (shorter, longer)
+                        for shorter, longer in item.get("shadowed_phrases", []))
     muted = sum(1 for o in report["overlaps"] if o.get("suppressed"))
     if muted: overlaps.append("%d suppressed by config" % muted)
     lines += section("Overlap candidates", overlaps)
@@ -873,6 +927,32 @@ def lines_for(report: Dict[str, Any], quiet: bool = False) -> List[str]:
     return lines
 
 
+def gh_escape(value: str, data: bool = False) -> str:
+    for old, new in (("%", "%25"), ("\r", "%0D"), ("\n", "%0A")):
+        value = value.replace(old, new)
+    return value if data else value.replace(":", "%3A").replace(",", "%2C")
+
+
+def github_lines(report: Dict[str, Any]) -> List[str]:
+    """One GitHub workflow command per finding, for inline PR annotations.
+
+    Severities match GitHub's own error/warning/notice, so no mapping is needed.
+    """
+    lines = []
+    for item in report["findings"]:
+        path = item["path"]
+        # A skill finding carries the skill directory; annotate its SKILL.md.
+        if path and Path(path).is_dir(): path = str(Path(path) / "SKILL.md")
+        if path:
+            try: path = str(Path(path).resolve().relative_to(Path.cwd()))
+            except (ValueError, OSError): pass  # outside the workspace: absolute is the best we have
+        properties = ["file=" + gh_escape(path)] if path else []
+        if item["line"]: properties.append("line=%d" % item["line"])
+        properties.append("title=" + gh_escape("skill-audit %s: %s" % (item["code"], item["skill"] or "library")))
+        lines.append("::%s %s::%s" % (item["severity"], ",".join(properties), gh_escape(item["message"], data=True)))
+    return lines
+
+
 def markdown_for(report: Dict[str, Any]) -> str:
     return "# skill-audit report\n\n```text\n%s\n```\n" % "\n".join(lines_for(report))
 
@@ -882,7 +962,10 @@ def parser() -> argparse.ArgumentParser:
     arg = argparse.ArgumentParser(description="Read-only audit of local agent skills. " + non_goals, epilog="Exit 0: clean/warnings; 1: strict warnings; 2: errors; 3: script failure. " + non_goals)
     arg.add_argument("--repo", action="append", default=[], metavar="PATH", help="Repository to scan (repeatable)")
     arg.add_argument("--config", help="TOML config path (default ~/.skill-audit.toml)")
-    arg.add_argument("--json", action="store_true", help="Emit full JSON report")
+    arg.add_argument("--json", action="store_true", help="Emit full JSON report (wins over --format)")
+    arg.add_argument("--format", choices=("text", "github"), default="text",
+                     help="github: emit one workflow command per finding for inline PR annotations, "
+                          "instead of the text report. Never changes the exit code.")
     arg.add_argument("--markdown", metavar="PATH", help="Also write full Markdown report to PATH")
     arg.add_argument("--quiet", action="store_true",
                      help="Suppress Inventory, Budget and Pocket check. Summary, Errors, "
@@ -903,6 +986,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.markdown:
             Path(args.markdown).expanduser().write_text(markdown_for(report), encoding="utf-8")
         if args.json: print(json.dumps(report, indent=2, sort_keys=True))
+        elif args.format == "github": print("\n".join(github_lines(report)))
         else: print("\n".join(lines_for(report, args.quiet)))
         severities = {item["severity"] for item in report["findings"]}
         return 2 if "error" in severities else (1 if args.strict and "warning" in severities else 0)

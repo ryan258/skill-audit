@@ -480,6 +480,61 @@ def test_quiet_keeps_collisions_and_changes_no_exit_code():
         shutil.rmtree(tmp)
 
 
+def test_dangling_skill_reference_is_reported_and_live_one_is_not():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        root = tmp / "global/claude"
+        write_skill(root, "planner", '---\nname: planner\ndescription: "Plans work. Use when the user asks to plan."\n---\n'
+                                     "Then follow skills/incremental-implementation/SKILL.md and skills/builder/SKILL.md.\n")
+        write_skill(root, "builder", '---\nname: builder\ndescription: "Builds work. Use when the user asks to build."\n---\nbody\n')
+        report = run(tmp)
+        missing = [item["missing"] for item in report["dangling_references"]]
+        assert missing == ["incremental-implementation"], missing
+        assert any(f["code"] == "dangling_reference" for f in report["findings"])
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_trigger_phrase_contained_in_another_is_a_notice_not_a_verdict():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        root = tmp / "global/claude"
+        write_skill(root, "quick", '---\nname: quick\ndescription: "Use when the user says \'debug React component\'."\n---\nbody\n')
+        write_skill(root, "deep", '---\nname: deep\ndescription: "Use when the user says \'debug React component rendering performance\'."\n---\nbody\n')
+        report = run(tmp)
+        shadows = [f for f in report["findings"] if f["code"] == "intent_shadow"]
+        assert len(shadows) == 1, [f["message"] for f in shadows]
+        assert "debug react component" in shadows[0]["message"]
+        # Containment is a hint about model routing, not a proven failure, so it
+        # must never be the thing that fails a --strict run on its own.
+        assert shadows[0]["severity"] == "notice", shadows[0]
+        assert any("is contained in" in line for line in sa.lines_for(report))
+        # An identical phrase is plain overlap, not shadowing.
+        assert not sa.phrase_shadows('says "run tests"', 'says "run tests"')
+        # One word matches too much to mean anything.
+        assert not sa.phrase_shadows('says "debug"', 'says "debug React component"')
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_github_format_emits_escaped_annotations():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        write_skill(tmp / "global/claude", "thin", '---\nname: thin\ndescription: "Use when: asked"\n---\nbody\n')
+        report = run(tmp)
+        lines = sa.github_lines(report)
+        assert lines and all(line.startswith(("::error ", "::warning ", "::notice ")) for line in lines), lines
+        annotated = [line for line in lines if "SKILL.md" in line]
+        assert annotated, "skill findings must annotate the SKILL.md, not its directory"
+        assert sa.gh_escape("a,b:c%d") == "a%2Cb%3Ac%25d", "property separators must not survive in a value"
+        assert sa.gh_escape("a,b:c", data=True) == "a,b:c", "message data only escapes %% and newlines"
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_empty_machine_does_not_crash():
     tmp = Path(tempfile.mkdtemp())
     try:
