@@ -4,7 +4,7 @@ The shortest route from a pile of `SKILL.md` files to a library that four agents
 
 Before the sequence, read [The skill-library model](library-model.md). It gives
 the one-page map of canonical copies, tool discovery, collision rules, and
-POCKET/SHELF/UNKNOWN. This guide turns that model into a working library.
+POCKET/SHELF/UNKNOWN/DISABLED. This guide turns that model into a working library.
 
 Read this once, top to bottom. `../skill-setup.md` is the per-tool reference you'll dip back into; `../README.md` is the flag reference. This is the sequence.
 
@@ -83,7 +83,9 @@ Aim for a clean Errors section before moving on. Warnings can wait.
 
 ## 3. Decide pocket vs shelf, and be stingy
 
-**Pocket** = the agent invokes it on its own; its description sits in context every session forever. **Shelf** = explicit invocation only.
+**Pocket** = the agent invokes it on its own; its effective listing metadata sits
+in context every session (normally name plus description, or only the name under
+Claude's `name-only`). **Shelf** = explicit invocation only.
 
 The default is pocket, which is why libraries drift expensive. Ask one question per skill:
 
@@ -104,11 +106,24 @@ policy:
   allow_implicit_invocation: false
 ```
 
-Gemini and Antigravity have no shelf mechanism. The audit reports them `UNKNOWN`, which is the honest answer, not a gap to work around.
+Gemini has no explicit-invocation shelf, but it does have persistent on/off
+controls. A skill is `POCKET` by default and `DISABLED` when its name appears in
+the effective `skills.disabled` list (or skills are disabled globally).
+Antigravity has no readable per-skill control, so `UNKNOWN` remains the honest
+answer there.
+
+Host-level switches take precedence over those file-local flags. Claude Code
+reads `skillOverrides` from `~/.claude/settings.json`; `off` is DISABLED,
+`user-invocable-only` is SHELF, and `on`/`name-only` are POCKET. Codex reads
+`[[skills.config]]` from `~/.codex/config.toml`; `enabled = false` is DISABLED.
+Gemini reads `skills.enabled` and union-merges `skills.disabled` across its
+persistent settings layers; `gemini skills disable <name>` writes
+the supported user-level setting.
+Check those files when a correct-looking skill still does not appear.
 
 **Target five or fewer pocket skills.** The audit warns above five when no config declares otherwise. Five auto-invocable skills the agent picks between reliably beats twenty it picks between badly.
 
-Set both flags on the same skill when you mean it. The audit raises `mode_disagreement` when Claude and Codex disagree, because that's almost always a half-finished edit rather than a decision.
+Set the Claude and Codex controls consistently when you mean the same routing behavior. The audit raises `mode_disagreement` when their POCKET/SHELF states disagree, because that's usually a half-finished edit rather than a decision. Gemini has no SHELF choice, and an explicit `DISABLED` state remains visible without being treated as a competing invocation mode.
 
 ---
 
@@ -125,6 +140,9 @@ mkdir -p ~/.agents/skills && ln -s ~/.skills/brand-voice ~/.agents/skills/brand-
 
 # Gemini CLI — use its own command, not a manual symlink
 gemini skills link ~/.skills/brand-voice
+
+# Antigravity — documented global directory
+mkdir -p ~/.gemini/config/skills && ln -s ~/.skills/brand-voice ~/.gemini/config/skills/brand-voice
 ```
 
 Then confirm each tool's own view, because the audit only proves the files are readable — not that a tool loaded them:
@@ -132,6 +150,11 @@ Then confirm each tool's own view, because the audit only proves the files are r
 ```sh
 gemini skills list --all
 ```
+
+If Gemini says the project folder is untrusted, it intentionally skips project
+agents, workspace settings, and hooks. Trust the folder in Gemini before using
+that command as evidence for repo-local discovery; `skill_audit.py --repo ...`
+can inspect those files but cannot answer the host's interactive trust prompt.
 
 For Claude and Codex, open a session and ask the agent to list the skills it can see. If a skill isn't in that list, nothing else in this document matters yet.
 
@@ -159,7 +182,12 @@ skills = ["startday", "session-handoff", "brand-voice"]
 context_window = 200000
 ```
 
-Now the pocket check reports lists instead of a bare count: correct, intended-shelf-but-actually-pocket (a missing flag), intended-pocket-but-actually-shelf (a flag added by mistake), in-config-but-not-installed (a typo or a stale entry), project-scope pocket skills, and Claude Desktop pocket skills.
+Now the pocket check reports lists instead of a bare count: correct,
+intended-shelf-but-actually-pocket, intended-pocket-but-shelf-or-disabled,
+installed-but-selected-tool-mode-unknown (informational, never drift),
+configured-but-not-visible-to-the-selected-tools (also informational),
+in-config-but-not-installed on an unfiltered scan, project-scope pocket skills,
+and Claude Desktop pocket skills.
 
 The last two lists are informational. A repo's own skills aren't governed by your global pocket list, and a Desktop skill's switch lives in the app rather than this file, so both are counted but never reported as drift against it.
 
@@ -188,7 +216,8 @@ Budget
 ------
 Claude: 1180/2000 chars across 4 pocket skills (pass)
 Codex:  1180/4000 chars across 4 pocket skills (pass)
-0 skills excluded: only Gemini/Antigravity can see them, and their mode is UNKNOWN
+Gemini: 1180 chars across 4 enabled skills (not measured — no published limit)
+0 skills excluded: only Antigravity can see them, and its mode is UNKNOWN
 
 Pocket check
 ------------
@@ -258,6 +287,10 @@ python3 skill_audit.py --strict
 python3 skill_audit.py --version
 ```
 
-Codex has already moved from `~/.codex/skills` to `~/.agents/skills`, Antigravity has three official docs that contradict each other, and the evidence for `~/.gemini/config/skills/` working across all three of its flavors is community testing rather than documentation. When a date is more than a quarter stale, check the vendor docs and update `GLOBAL_PATHS` at the top of `skill_audit.py`.
+Codex has already moved from `~/.codex/skills` to `~/.agents/skills`.
+Antigravity documents `~/.gemini/config/skills/` globally and
+`.agents/skills/` in workspaces, with backward support for `.agent/skills/`.
+Older global `antigravity` and `antigravity-cli` roots are non-portable. When a date is more than a quarter stale,
+check the vendor docs and update `GLOBAL_PATHS` at the top of `skill_audit.py`.
 
 **When something breaks mysteriously,** work the four steps in order — installed, discovered, listed, invocable. Most failures are step 2, and they're silent.

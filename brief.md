@@ -14,15 +14,16 @@ Build a Python script that finds every `SKILL.md` on the machine, checks it agai
 
 ## Definitions
 
-These three words are this tool's vocabulary, not vendor wording. Use them consistently in code, output, and JSON.
+These four words are this tool's vocabulary, not vendor wording. Use them consistently in code, output, and JSON.
 
 | Term | Meaning |
 |---|---|
-| **POCKET** | The agent can invoke it on its own. Its description sits in context every session. |
+| **POCKET** | The agent can invoke it on its own. Its effective listing metadata sits in context every session. |
 | **SHELF** | Explicit invocation only. The agent will not reach for it. |
 | **UNKNOWN** | The tool has no documented flag for this, so the state cannot be determined. |
+| **DISABLED** | The host explicitly switched the skill off, so it cannot be invoked there. |
 
-`UNKNOWN` is a real, expected state — not a failure. Gemini CLI and Antigravity currently have no documented way to block auto-invocation, so every skill visible only to those two reports as `UNKNOWN`.
+`UNKNOWN` is a real, expected state — not a failure. Antigravity has no readable per-skill invocation setting, and malformed or unreadable host configuration must never be guessed. Gemini CLI's persistent enabled/disabled settings are readable, so a valid Gemini configuration reports `POCKET` or `DISABLED`.
 
 Never guess a state. `UNKNOWN` is the correct answer when there is nothing to read.
 
@@ -33,7 +34,7 @@ Never guess a state. `UNKNOWN` is the correct answer when there is nothing to re
 One command answers four questions:
 
 1. What skills do I actually have, and where?
-2. Which ones are auto-invocable, explicit-only, or unknown, by tool?
+2. Which ones are auto-invocable, explicit-only, disabled, or unknown, by tool?
 3. Where am I over budget, duplicated, or overlapping?
 4. What should my final stack look like?
 
@@ -62,9 +63,9 @@ Scan these locations. Skip any that do not exist and note it as "not present" ra
 | Claude Code | `~/.claude/skills/` |
 | Codex + Gemini CLI | `~/.agents/skills/` |
 | Gemini CLI (alt) | `~/.gemini/skills/` |
-| Antigravity (all 3 flavors) | `~/.gemini/config/skills/` |
+| Antigravity | documented `~/.gemini/config/skills/` |
 
-Also check these Antigravity paths and report them as **non-portable** if skills are found there, since only `~/.gemini/config/skills/` works across all three flavors:
+Also check these legacy Antigravity paths and report them as **non-portable** if skills are found there:
 
 - `~/.gemini/antigravity/skills/`
 - `~/.gemini/antigravity-cli/skills/`
@@ -76,8 +77,14 @@ Accept an optional `--repo <path>` argument, repeatable. For each repo, scan:
 - `<repo>/.claude/skills/`
 - `<repo>/.agents/skills/`
 - `<repo>/.gemini/skills/`
+- `<repo>/.agent/skills/` (Antigravity backward compatibility)
 
 Also walk subdirectories for nested `.claude/skills/` and `.agents/skills/` folders. Report nested skills separately — they load differently and are a known source of surprise.
+
+Treat an explicitly supplied repository as the workspace settings context. Do
+not claim that this proves the host trusts the folder: Gemini may still skip
+project agents, settings, and hooks until its interactive folder-trust check
+succeeds.
 
 ### Discovery rule
 
@@ -109,18 +116,27 @@ For every skill found, parse the YAML frontmatter and run these checks.
 - Frontmatter block is present and parses
 - `description` field is present
 - If `name` is present, does it match the directory name
+- Directory and present name use 1–64 lowercase letters, digits, and single hyphens
+- Description is no more than 1,024 characters
+- `compatibility`, when present, is a non-empty string of at most 500 characters
+- `metadata`, when present, maps strings to strings
 
 ### 5.1a Frontmatter parser scope
 
 YAML parsing must use a small hand-rolled reader, not PyYAML, because of the stdlib-only rule.
 
-**Support exactly these five forms. Nothing else.**
+**Support these five general forms, plus the field-specific metadata mapping
+below. Flag anything else rather than guessing.**
 
 1. `key: value` — bare scalar
 2. `key: "value"` or `key: 'value'` — quoted scalar
 3. `key: [a, b, c]` — inline flow list
 4. Block list — `key:` followed by indented `- item` lines
 5. Block scalar — `key: |` or `key: >` followed by an indented block
+
+For the portable `metadata:` field only, support one indented level of
+string-to-string mapping entries. Other nested mappings remain unsupported in
+`SKILL.md`; Codex policy parsing has its own one-level exception.
 
 Anything outside this set gets flagged as unparseable. Do not guess. Do not fall back to treating it as a string.
 
@@ -175,15 +191,15 @@ The description is the trigger. Score it on:
 - Flag over 500 lines with a recommendation to move detail into supporting files
 - Report total character count for budget math
 
-### 5.4 Invocation mode
+### 5.4 Invocation state
 
-Detect whether the skill is pocket or shelf.
+Detect whether the skill is pocket, shelf, disabled, or unknown.
 
-Detect the invocation state **per tool**, not once per skill. The same skill can be `SHELF` in Claude and `UNKNOWN` in Gemini at the same time.
+Detect the invocation state **per tool**, not once per skill. The same skill can be `SHELF` in Claude, `POCKET` in Gemini, and `UNKNOWN` in Antigravity at the same time.
 
-- **Claude:** `disable-model-invocation: true` in the `SKILL.md` frontmatter means `SHELF`. Absent means `POCKET`.
-- **Codex:** `allow_implicit_invocation: false` under a `policy:` key means `SHELF`. Absent means `POCKET`.
-- **Gemini CLI:** always `UNKNOWN`. No documented flag exists.
+- **Claude:** `disable-model-invocation: true` in `SKILL.md` means `SHELF`; then apply `~/.claude/settings.json` `skillOverrides` (`on`, `name-only`, `user-invocable-only`, `off`) as the host-level override. `off` is `DISABLED`.
+- **Codex:** `allow_implicit_invocation: false` under a `policy:` key means `SHELF`; then apply `~/.codex/config.toml` `[[skills.config]] enabled`. `false` is `DISABLED`.
+- **Gemini CLI:** read persistent system-default, user, explicitly audited workspace, and system-override JSON settings. `skills.enabled: false`, `admin.skills.enabled: false`, or a name in the union-merged `skills.disabled` arrays means `DISABLED`; otherwise the skill is `POCKET`. Malformed settings produce `config_error` and `UNKNOWN`, never a guess. Gemini has no explicit-invocation `SHELF` state.
 - **Antigravity:** always `UNKNOWN`. No documented flag exists.
 
 **Where the Codex file lives.** It is per-skill, not global. The path is:
@@ -192,7 +208,7 @@ Detect the invocation state **per tool**, not once per skill. The same skill can
 <skill-dir>/agents/openai.yaml
 ```
 
-So for a skill at `~/.agents/skills/brand-voice/`, the file is `~/.agents/skills/brand-voice/agents/openai.yaml`. There is no repo-level or home-level version of this file. If it is absent, the default is `allow_implicit_invocation: true`, meaning pocket.
+So for a skill at `~/.agents/skills/brand-voice/`, the file is `~/.agents/skills/brand-voice/agents/openai.yaml`. There is no repo-level or home-level version of this *policy file*. If it is absent, the file-local default is pocket; Codex's host config can still disable the skill.
 
 The relevant shape inside that file:
 
@@ -203,9 +219,11 @@ policy:
 
 Parse it with the same hand-rolled reader from 5.1a, extended to handle one level of nesting under `policy:`.
 
-Report each skill's state for every tool that can currently see it. Flag any skill where two tools disagree — for example `SHELF` in Claude but `POCKET` in Codex. That is usually an oversight, not a decision.
+Report each skill's state for every tool that can currently see it. Flag
+POCKET-versus-SHELF disagreement — for example `SHELF` in Claude but `POCKET`
+in Codex. `UNKNOWN` and `DISABLED` are not competing invocation modes.
 
-Only `POCKET` skills count toward the budget math in 6.3 and the pocket check in 6.4. `UNKNOWN` skills are excluded from budget totals, and the report must say how many were excluded so the number is not mistaken for a complete picture.
+Only `POCKET` skills count toward the budget math in 6.3 and the pocket check in 6.4. `UNKNOWN` and `DISABLED` skills are excluded. Claude and Codex have graded limits; Gemini and Claude Desktop have counted totals but no invented limit. The report must say how many unknown-only skills were excluded so the number is not mistaken for a complete picture.
 
 ---
 
@@ -257,7 +275,7 @@ Output as "these two may overlap — read them" not "these conflict."
 
 Two separate budgets, because the tools differ.
 
-**Claude Code:** the skill listing budget scales at roughly 1% of the model context window, and individual entries are capped around 1,536 characters. Sum the name plus description characters for all pocket skills. Report the total and flag entries over the per-entry cap.
+**Claude Code:** the skill listing budget scales at roughly 1% of the model context window, and individual entries are capped around 1,536 characters. Sum the effective listing text for all pocket skills: normally name plus description, but name only under a `name-only` override. Report the total and flag entries over the per-entry cap.
 
 **Codex:** the initial skill list uses at most 2% of the context window, or 8,000 characters when the window size is unknown. Use 8,000 as the conservative default. Sum pocket skill name plus description characters. Flag if over.
 
@@ -265,11 +283,15 @@ Make the assumed context window size a constant at the top of the file with a co
 
 ### 6.4 Pocket count
 
-Read an optional config file (see section 7). Compare the intended pocket list against what is actually pocket on disk. Report three lists:
+Read an optional config file (see section 7). Compare the intended pocket list against what is actually pocket on disk. Report resolved and unresolved groups separately:
 
 - Intended pocket, and actually pocket — correct
 - Intended shelf, but actually pocket — needs a flag added
-- Intended pocket, but actually shelf — flag added by mistake
+- Intended pocket, but actually shelf or disabled — host or file setting disagrees
+- Installed, but every selected-tool state is unknown — informational, not drift
+- Configured pocket, but non-pocket in the selected tools — informational under `--tool`, because an excluded host may satisfy the any-tool intent
+- Configured, but not visible under `--tool` — informational, not missing
+- Configured but absent from an unfiltered scan — stale or misspelled
 
 If no config file exists, just report the pocket count and warn if it exceeds five.
 
@@ -304,12 +326,12 @@ If two skills overlap and neither is the declared owner of any area, raise the s
 Plain text. No color codes unless stdout is a TTY. Sections in this order:
 
 1. **Summary** — total skills, unique skills, pocket count, locations scanned
-2. **Inventory** — table of name, real path, reachable-from tools, pocket/shelf, line count
+2. **Inventory** — table of name, real path, reachable-from tools, per-tool state, line count
 3. **Errors** — unparseable frontmatter, broken symlinks, missing descriptions
 4. **Warnings** — weak descriptions, oversized bodies, non-portable Antigravity paths, double links
 5. **Name collisions** — with the per-tool precedence table
 6. **Overlap candidates** — clearly labeled as a hint requiring human review
-7. **Budget** — Claude and Codex figures, with pass or over
+7. **Budget** — Claude and Codex figures with pass or over; Gemini and Claude Desktop totals marked not measured
 8. **Pocket check** — intended versus actual
 9. **Recommended actions** — a numbered list, ordered by severity
 
@@ -326,7 +348,7 @@ Each section prints even when empty, with a one-line "none found" note. A sectio
 | `--json` | Emit the full report as JSON instead of text |
 | `--markdown <path>` | Also write a markdown version of the report to that path |
 | `--quiet` | Print errors and warnings only. Skip inventory, budget, and pocket check. |
-| `--tool <name>` | Limit the scan to one tool: claude, codex, gemini, antigravity |
+| `--tool <name>` | Limit the scan to one tool: claude, codex, gemini, antigravity, claude-desktop |
 | `--strict` | Treat warnings as failures. See exit codes. |
 | `--version` | Print version and the `PATHS_VERIFIED` date |
 
@@ -343,7 +365,7 @@ Top-level keys:
 
 ```
 meta          — version, paths_verified date, scan timestamp, locations scanned
-skills        — array of every unique skill, with per-tool state
+skills        — array of every unique skill, with per-tool state, effective listing text, and host overrides
 findings      — array of every finding
 collisions    — name collision groups with per-tool precedence
 overlaps      — candidate pairs with shared term counts
@@ -384,7 +406,7 @@ State these in the script's own `--help` text so nobody expects them.
 1. **It does not detect real conflicts.** Two skills can give opposite instructions in plain prose that share no keywords. The overlap check is a word-similarity hint. A human still has to read the files.
 2. **It does not fix anything.**
 3. **It does not verify triggering.** Whether a skill actually fires on a given prompt requires running the agent. That is an eval, not an audit.
-4. **It does not check Gemini or Antigravity shelf state.** No documented flag exists for either. Report those skills as "invocation mode unknown."
+4. **It does not guess Antigravity shelf state.** No readable per-skill flag exists. Gemini's persistent enabled/disabled state is modeled, but its disable control is not an explicit-invocation shelf.
 
 ---
 
@@ -401,14 +423,18 @@ The build is done when all of these pass.
 7. Produces valid JSON with `--json`
 8. Never writes to any path outside the one given by `--markdown`
 9. `--help` states the four non-goals
-10. Parses all five YAML forms in the 5.1a reference block, and flags a sixth form it does not recognize
+10. Parses all five general YAML forms plus the portable metadata mapping, and flags unsupported forms it does not recognize
 11. Reads `<skill-dir>/agents/openai.yaml` and reports the skill as shelf when `allow_implicit_invocation: false`
 12. Two descriptions sharing 5+ distinctive terms produce a `WARNING`; two sharing 2 produce nothing
 13. A run with warnings and no errors exits `0` by default, and exits `1` with `--strict`
 14. `--quiet` changes printed output but produces the same exit code as a normal run
-15. A skill visible only to Gemini reports `UNKNOWN`, not `POCKET`, and is excluded from budget totals
+15. A Gemini skill defaults to `POCKET`, a persistently disabled Gemini skill reports `DISABLED`, and Gemini listing totals are counted without an invented limit
 16. A `SKILL.md` with a readable description but one broken field produces a `WARNING`, not an `ERROR`, and names the field and line
 17. `--json` output includes `recommendations` and a `severity` plus stable `code` on every finding
+18. Claude, Codex, and Gemini host-off settings report `DISABLED` and remove the skill from budget math
+19. A tool-filtered scan never turns `UNKNOWN`, a selected non-pocket state, or an excluded-host skill into false global config drift
+20. Routing-harness infrastructure errors exit `3`, not `1`
+21. Antigravity's documented global path is `~/.gemini/config/skills`; older global paths remain visible only as non-portable findings
 
 ---
 
@@ -416,7 +442,7 @@ The build is done when all of these pass.
 
 - Write the checks as small independent functions so new ones are easy to add later
 - Keep the tool-specific paths in a single dictionary constant at the top, since these paths have changed within the past year and will change again
-- Add a comment above that dictionary with the date the paths were verified: **August 1, 2026**
+- Add a comment above that dictionary with the date the paths were verified: **August 6, 2026**
 - Include a `--version` flag and a `PATHS_VERIFIED` constant so it is obvious when the path data is stale
 - Prefer readable output over dense output. This report gets read by a human who is deciding what to delete.
 
@@ -426,6 +452,9 @@ The build is done when all of these pass.
 
 Tell the user this in the report footer.
 
-These paths moved recently. Codex changed from `~/.codex/skills` to `.agents/skills`. Antigravity has three official docs that disagree with each other, and `~/.gemini/config/skills/` is the only global path confirmed to work across all three of its flavors — that finding is community testing, not official documentation.
+These paths moved recently. Codex changed from `~/.codex/skills` to
+`.agents/skills`. Antigravity documents `~/.gemini/config/skills/` globally and
+`.agents/skills/` for workspaces, with backward support for `.agent/skills/`.
+Older `~/.gemini/antigravity*/skills/` roots are scanned as non-portable.
 
 **Re-verify quarterly.** The script should print the `PATHS_VERIFIED` date every run so this is impossible to forget.

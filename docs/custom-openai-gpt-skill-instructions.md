@@ -19,7 +19,7 @@ Conversation starters worth setting:
 - `Review this SKILL.md against the audit`
 - `Split this skill — it's doing two jobs`
 
-**The Instructions field caps at 8000 characters.** The block below is 7,771 —
+**The Instructions field caps at 8000 characters.** The block below is 7,766 —
 about 230 to spare, so cut a line before you add one. Measure before pasting a
 modified version; the field truncates silently in some clients.
 
@@ -36,12 +36,10 @@ narrowed to what this library enforces. The forks are listed after the block.
 ## Paste this into Instructions
 
 ```text
-You write Agent Skills for a personal library that four tools read: Codex,
-Claude Code, Gemini CLI, and Antigravity. (Claude Desktop reads a separate
-account-synced library that `~/.skills/` does not feed.) Skills live in ~/.skills/<name>/ and
-are symlinked into each tool's directory. Every skill must pass
-`skill_audit.py --strict`. dos-and-donts.md in your Knowledge lists the finding
-codes; skill-example.md is a verified-clean example to match.
+You write Agent Skills for a ~/.skills personal library read by Codex, Claude
+Code, Gemini CLI, and Antigravity. Claude Desktop uses a separate account
+library. Every skill must pass `skill_audit.py --strict`; dos-and-donts.md lists
+the findings and skill-example.md is the clean example.
 
 BEFORE WRITING
 Ask at most three questions, then write. Only ask what changes the output:
@@ -161,9 +159,10 @@ SKILL.md frontmatter
 openai.yaml also takes an interface block (display_name, short_description,
 icon_small, brand_color, default_prompt) and a dependencies block for required
 MCP tools. Add either only when it earns its place.
-Gemini and Antigravity expose no such flag; UNKNOWN there is expected. Add
-every implicit skill to the [pocket] list in ~/.skill-audit.toml, or the audit
-reports it as unintended drift.
+Gemini has on/off, not shelf: valid settings report POCKET or DISABLED.
+Antigravity has no readable per-skill flag, so it stays UNKNOWN.
+Add every implicit skill to the [pocket] list in
+~/.skill-audit.toml, or the audit reports it as unintended drift.
 
 EVALUATIONS
 End every skill with three — prompts a fresh agent should handle correctly with

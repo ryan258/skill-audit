@@ -47,13 +47,18 @@ The trap this avoids: copying skills into four directories, editing one, and spe
 ln -s ~/.skills/brand-voice ~/.claude/skills/brand-voice
 ```
 
-**Verify:** run `/context` in a session, or ask the agent directly: *"list the skills you can see and say which are auto-invocable."* The description of every pocket skill sits in context every session, so the agent can read them back to you.
+**Verify:** run `/context` in a session, or ask the agent directly: *"list the skills you can see and say which are auto-invocable."* Pocket listing metadata is present each session, except that a `name-only` override intentionally hides the description.
 
 **Shelf a skill:** add to the frontmatter:
 ```yaml
 disable-model-invocation: true
 ```
 It stays available via `/skill-name` but the agent won't reach for it on its own.
+
+**Host override:** `~/.claude/settings.json` may contain `skillOverrides` with
+`on`, `name-only`, `user-invocable-only`, or `off`. Those values override the
+frontmatter state. The audit reports `off` as `DISABLED`,
+`user-invocable-only` as `SHELF`, and the other two as `POCKET`.
 
 ---
 
@@ -74,7 +79,7 @@ gemini skills list --all
 ```
 This is the most useful verification command of any of the CLI tools. It prints every discovered skill with `[Enabled]` / `[Disabled]`, the description, and the resolved file location. If your skill isn't in that output, Gemini cannot see it — nothing else matters until that's fixed.
 
-**Shelf a skill:** there is no shelf. `gemini skills disable <name>` exists but it's a blunter instrument — it removes the skill from consideration entirely rather than making it explicit-invocation-only. `skill_audit.py` reports Gemini state as `UNKNOWN` for this reason, and excludes those skills from budget math.
+**Shelf a skill:** there is no shelf. `gemini skills disable <name>` is a blunter instrument — it removes the skill from consideration entirely rather than making it explicit-invocation-only. Gemini persists this under `skills.disabled`; `skill_audit.py` reports enabled skills as `POCKET`, disabled skills as `DISABLED`, and counts the enabled listing without inventing a limit.
 
 **Watch for the double link.** If both `~/.agents/skills/` and `~/.gemini/skills/` resolve to the same target, Gemini reads both as user scope and the same skill lands in the same tier twice. The audit flags this as `double_link`.
 
@@ -89,7 +94,7 @@ This is the most useful verification command of any of the CLI tools. It prints 
 | 5 | Extension | bundled extension paths |
 | 6 | Built-in | CLI built-ins |
 
-*† The four main tiers (Workspace > User > Extension > Built-in) are official Gemini CLI precedence rules; the within-tier `.agents/skills/` > `.gemini/skills/` preference (rows 1 vs 2, 3 vs 4) is observed via community testing rather than official documentation.*
+*† The four main tiers (Workspace > User > Extension > Built-in) are official Gemini CLI precedence rules; the within-tier `.agents/skills/` > `.gemini/skills/` preference (rows 1 vs 2, 3 vs 4) is observed in Gemini CLI's own conflict output rather than stated in its documentation.*
 
 Extension and built-in skills don't live in a scanned path, so the audit resolves the top four and names the winner per tool. Pick one home for a skill anyway — relying on precedence to break a tie you created is how you end up editing the copy that never loads.
 
@@ -114,7 +119,16 @@ ln -s ~/.skills/brand-voice ~/.agents/skills/brand-voice
 policy:
   allow_implicit_invocation: false
 ```
-There is no repo-level or home-level version of this file. Absent means pocket.
+Absent means pocket unless the host disables the skill in
+`~/.codex/config.toml`:
+
+```toml
+[[skills.config]]
+path = "/absolute/path/to/skill/SKILL.md"
+enabled = false
+```
+
+That is an on/off control, not a shelf flag; the audit reports it as `DISABLED`.
 
 `openai.yaml` may carry an `interface:` block alongside `policy:`. The audit reads both one-level mappings; only `policy.allow_implicit_invocation` affects shelf detection.
 
@@ -124,14 +138,16 @@ There is no repo-level or home-level version of this file. Absent means pocket.
 
 ## Antigravity
 
-**Path:** `~/.gemini/config/skills/`
+**Documented global path:** `~/.gemini/config/skills/`
 
-This is the only global path confirmed to work across all three Antigravity flavors. Two others exist and partly work:
+Workspace skills use `.agents/skills/`; Antigravity also documents backward
+support for `.agent/skills/`.
 
-- `~/.gemini/antigravity/skills/`
-- `~/.gemini/antigravity-cli/skills/`
-
-`skill_audit.py` scans both and flags anything found there as **non-portable**. Antigravity has three official docs that disagree with each other; the evidence for `~/.gemini/config/skills/` is community testing, not documentation. Re-check it.
+`skill_audit.py` also scans the older global
+`~/.gemini/antigravity/skills/` and
+`~/.gemini/antigravity-cli/skills/` roots, flagging both **non-portable**.
+Re-check vendor paths quarterly; the printed `PATHS_VERIFIED` date makes
+staleness visible.
 
 **Shelf a skill:** no documented mechanism. Reports as `UNKNOWN`.
 
@@ -139,35 +155,27 @@ This is the only global path confirmed to work across all three Antigravity flav
 
 ## Current state of this machine
 
-Checked August 4, 2026:
+The canonical personal folder contained **21 skills when rechecked August 6,
+2026**. Host totals are deliberately not frozen here: bundled skills, Desktop
+account sync, disabled entries, and legacy roots can change independently of
+this repository.
 
-| Tool | Installed | Sees your skills? |
-|---|---|---|
-| Claude Code | yes | **yes** — 28 skills |
-| Gemini CLI | yes | **yes** — 28 skills (30 rows incl. built-ins) |
-| Codex | yes | **yes** — 58 skills (also reads `~/.codex/skills`) |
-| Antigravity | path present | 28 skills discoverable; mode UNKNOWN |
-| Claude Desktop | yes | **yes** — from its own account-synced library (count omitted on purpose, see below) |
+Refresh the live view instead:
 
-`~/.skills/` holds 29 skills, and all four cupboard paths — `~/.claude/skills/`,
-`~/.agents/skills/`, `~/.gemini/skills/`, `~/.gemini/config/skills/` — now exist
-and resolve to it. The wiring below is what got them there; it is kept as the
-recipe, not as a description of a broken machine.
-
-Claude Desktop's skills are a **separate library** and are not served by any of
-that wiring. See [docs/library-model.md](docs/library-model.md). No count is
-recorded here: that library syncs from your account and changes without a local
-edit — it gained a skill mid-session while this page was being written. For the
-current number run `python3 skill_audit.py --tool claude-desktop`, or read the
-regenerated [skill wiki](docs/skill-wiki.md), which is dated for that reason.
-
-To fix Gemini:
 ```sh
-for d in ~/.skills/*/; do gemini skills link "$d"; done
+python3 skill_audit.py
+python3 skill_audit.py --tool claude
+python3 skill_audit.py --tool codex
+python3 skill_audit.py --tool gemini
+python3 skill_audit.py --tool antigravity
+python3 skill_audit.py --tool claude-desktop
 gemini skills list --all
 ```
 
-To fix Codex, reinstall it first — `codex --help` currently fails with `ENOENT` on a missing vendored binary — then create `~/.agents/skills/` and link.
+Claude Desktop remains a **separate library** and is not served by the symlink
+wiring above. See [docs/library-model.md](docs/library-model.md). Treat every
+count in a generated [skill wiki](docs/skill-wiki.md) as a dated snapshot, not a
+permanent machine fact.
 
 ---
 
@@ -188,10 +196,15 @@ Then open each agent and ask it to list its skills. The audit tells you what's o
 
 ## Budget
 
-Every pocket skill's description sits in context every session, in every tool, forever. That's the real cost, and it's why the shelf exists.
+Every pocket skill's effective listing metadata sits in context every session.
+That is normally its name plus description; Claude `name-only` carries only the
+name. That's the real cost, and it's why the shelf exists.
 
-Rough ceilings: Claude allots about 1% of the context window to the skill listing with individual entries capped near 1,536 characters; Codex uses at most 2%, or 8,000 characters when the window is unknown. `skill_audit.py` sums pocket name + description characters against both and warns when either is over.
+Rough ceilings: Claude allots about 1% of the context window to the skill listing with individual entries capped near 1,536 characters; Codex uses at most 2%, or 8,000 characters when the window is unknown. `skill_audit.py` sums effective pocket listing text per host—normally name plus description, or only the Claude name under `name-only`—and warns when either is over.
 
 Skills you invoke by name deliberately should be shelved. Skills the agent needs to *notice* on its own should be pocket, and there should be few of them. If you have more than five pocket skills and no config declaring that's intentional, the audit warns.
 
-Note what the budget number excludes: Gemini and Antigravity skills report `UNKNOWN`, so they're left out of the totals. The audit prints the excluded count alongside each figure — a passing budget with 20 exclusions is not a passing budget.
+Gemini's enabled listing is counted but marked **not measured** because no
+published limit exists. Antigravity-only skills remain `UNKNOWN` and are the
+ones excluded from totals; the audit prints that count so a partial number is
+never mistaken for a complete budget.

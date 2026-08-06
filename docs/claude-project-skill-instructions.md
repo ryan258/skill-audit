@@ -167,9 +167,11 @@ For SHELF, set both flags — one without the other is a reported disagreement:
   policy:
     allow_implicit_invocation: false
 
-Gemini and Antigravity have no documented flag; their mode is UNKNOWN and that is
-expected. Add every POCKET skill to the `[pocket]` list in ~/.skill-audit.toml,
-otherwise the audit reports it as unintended drift.
+Gemini has persistent `skills.enabled` and `skills.disabled` on/off controls,
+so the audit reports valid Gemini settings as POCKET or DISABLED; it has no
+explicit-only shelf. Antigravity remains UNKNOWN because it has no readable
+per-skill flag. Add every POCKET skill to the `[pocket]` list in
+~/.skill-audit.toml, otherwise the audit reports it as unintended drift.
 
 ## Evaluations
 

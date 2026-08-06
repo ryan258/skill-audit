@@ -6,8 +6,9 @@ static, offline, instant and deterministic. This one shells out to a real model
 and is none of those things — a check you run and read, not a gate you trust
 blindly. Keeping them apart is what keeps the auditor dependency-free.
 
-Only POCKET skills are offered. A shelved skill is not in the model's listing,
-so it cannot be routed to, and pretending otherwise would test a fiction.
+Only POCKET skills are offered. SHELF, DISABLED, UNKNOWN, and absent skills are
+not in the model's listing, so they cannot be routed to, and pretending otherwise
+would test a fiction.
 
 Cases are JSONL: {"query": "...", "expected": "skill-name"}, or "expected": null
 for "no skill should fire". Routing is a classification problem, so grading is
@@ -44,9 +45,17 @@ def pocket_listing(args: argparse.Namespace) -> List[Tuple[str, str]]:
     """
     report = sa.build_report(argparse.Namespace(repo=args.repo, config=args.config, tool=args.tool))
     keep_desktop = bool(args.tool) and sa.DESKTOP in args.tool
-    return sorted({(skill["name"], skill["description"]) for skill in report["skills"]
-                   if "POCKET" in skill["states"].values()
-                   and (keep_desktop or skill.get("library", "local") != sa.DESKTOP)})
+    listing = set()
+    for skill in report["skills"]:
+        if keep_desktop or skill.get("library", "local") != sa.DESKTOP:
+            descriptions = [skill.get("listing_descriptions", {}).get(tool, skill["description"])
+                            for tool, state in skill["states"].items() if state == "POCKET"]
+            if descriptions:
+                # A multi-tool run models the union. Keep the richest listing
+                # any selected pocket host exposes; a Claude-only name-only
+                # override correctly contributes an empty description.
+                listing.add((skill["name"], max(descriptions, key=len)))
+    return sorted(listing)
 
 
 def load_cases(path: Path) -> List[Dict[str, Any]]:
@@ -98,6 +107,10 @@ def matches(expected: Optional[str], answer: str) -> bool:
     return answer.strip().casefold() == (expected or NONE).casefold()
 
 
+def is_harness_error(answer: str) -> bool:
+    return answer.startswith("ERROR:")
+
+
 def run_cases(cases: List[Dict[str, Any]], listing: List[Tuple[str, str]], model: str,
               repeat: int, jobs: int, ask: Callable[[str, str, str], str] = ask_claude) -> List[Dict[str, Any]]:
     # An expectation naming a skill outside the listing can never pass, and
@@ -105,7 +118,8 @@ def run_cases(cases: List[Dict[str, Any]], listing: List[Tuple[str, str]], model
     # is skipped before the trials are built, so it costs no model calls either.
     names = {name for name, _ in listing}
     results: List[Dict[str, Any]] = [
-        {"query": case["query"], "expected": case["expected"], "answers": [], "passed": 0, "rate": None,
+        {"query": case["query"], "expected": case["expected"], "answers": [], "errors": [],
+         "passed": 0, "rate": None,
          "skipped": bool(case["expected"]) and case["expected"] not in names}
         for case in cases]
     text = "\n".join("%s: %s" % pair for pair in listing)
@@ -117,8 +131,11 @@ def run_cases(cases: List[Dict[str, Any]], listing: List[Tuple[str, str]], model
         results[index]["answers"].append(answer)
     for result in results:
         if result["skipped"]: continue
+        result["errors"] = [answer for answer in result["answers"] if is_harness_error(answer)]
         result["passed"] = sum(1 for answer in result["answers"] if matches(result["expected"], answer))
-        result["rate"] = result["passed"] / len(result["answers"])
+        # A partial/infrastructure run has no routing rate: treating the missing
+        # trial as a miss would be the same category error as returning exit 1.
+        result["rate"] = None if result["errors"] else result["passed"] / len(result["answers"])
     return results
 
 
@@ -128,18 +145,33 @@ def report_lines(results: List[Dict[str, Any]], listing: List[Tuple[str, str]]) 
         total = len(result["answers"])
         if result["skipped"]:
             lines.append("SKIP   -/-   want %-24s %s" % (result["expected"], json.dumps(result["query"])))
-            lines.append("             not in the pocket listing (shelved or not installed) — not scored")
+            lines.append("             not in the pocket listing (shelf, disabled, unknown, or absent) — not scored")
             continue
-        verdict = "PASS" if result["passed"] == total else "FAIL"
+        verdict = "ERROR" if result["errors"] else ("PASS" if result["passed"] == total else "FAIL")
         lines.append("%s  %d/%d  want %-24s %s" % (verdict, result["passed"], total,
                                                    result["expected"] or NONE, json.dumps(result["query"])))
-        wrong = sorted({answer for answer in result["answers"] if not matches(result["expected"], answer)})
+        wrong = sorted({answer for answer in result["answers"]
+                        if not is_harness_error(answer) and not matches(result["expected"], answer)})
         if wrong: lines.append("            got: %s" % ", ".join(wrong))
-    scored = [result for result in results if not result["skipped"]]
-    skipped = len(results) - len(scored)
-    summary = "\n%d/%d cases passed every trial" % (sum(1 for r in scored if r["rate"] == 1), len(scored))
-    lines.append(summary + ("" if not skipped else "; %d skipped (expectation not in the listing)" % skipped))
+        if result["errors"]: lines.append("            harness: %s" % ", ".join(sorted(set(result["errors"]))))
+    completed = [result for result in results if not result["skipped"] and not result["errors"]]
+    skipped = sum(1 for result in results if result["skipped"])
+    errored = sum(1 for result in results if result["errors"])
+    summary = "\n%d/%d completed cases passed every trial" % (
+        sum(1 for result in completed if result["rate"] == 1), len(completed))
+    if errored:
+        summary += "; %d harness-error %s not scored" % (
+            errored, "case" if errored == 1 else "cases")
+    if skipped: summary += "; %d skipped (expectation not in the listing)" % skipped
+    lines.append(summary)
     return lines
+
+
+def exit_code_for(results: List[Dict[str, Any]]) -> int:
+    """Use exit 3 for infrastructure, 1 only for real routing misses."""
+    if any(result.get("errors") for result in results): return 3
+    if any(result["rate"] is not None and result["rate"] < 1 for result in results): return 1
+    return 0
 
 
 def positive_int(value: str) -> int:
@@ -168,7 +200,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         results = run_cases(load_cases(Path(args.cases).expanduser()), listing, args.model, args.repeat, args.jobs)
         if args.json: print(json.dumps({"model": args.model, "listing_size": len(listing), "results": results}, indent=2))
         else: print("\n".join(report_lines(results, listing)))
-        return 1 if any(result["rate"] is not None and result["rate"] < 1 for result in results) else 0
+        return exit_code_for(results)
     except SystemExit:
         raise
     except Exception as exc:

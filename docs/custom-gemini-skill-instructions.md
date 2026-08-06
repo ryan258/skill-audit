@@ -133,13 +133,15 @@ references/ and link from SKILL.md.
   constant carries a comment justifying its value.
 
 INVOCATION
-Gemini CLI and Antigravity expose no per-skill flag for suppressing automatic
-activation. `/skills disable <name>` removes a skill entirely rather than
-shelving it, so the audit reports these two tools as UNKNOWN and that is
-expected, not a failure.
-The practical consequence: in Gemini you cannot fix a too-eager skill with a
-flag. The description is the only control. Write a description narrow enough
-that automatic activation is always the behaviour you wanted.
+Gemini CLI has a persistent on/off control, not an explicit-only shelf.
+`/skills disable <name>` or `gemini skills disable <name>` adds the
+name to `skills.disabled`; the audit reports it as DISABLED. Enabled Gemini
+skills report POCKET. Antigravity has no readable per-skill flag and therefore
+reports UNKNOWN.
+The practical consequence: for an enabled Gemini skill, the description is the
+routing control. Write it narrowly enough that automatic activation is always
+the behaviour you wanted; disable the skill when it should not be considered at
+all.
 Claude and Codex do have flags. For a skill meant to be named explicitly, set
 BOTH — one without the other is a reported disagreement:
 
@@ -181,8 +183,10 @@ collide and drift:
   ln -s ~/.skills/<name> ~/.agents/skills/<name>
   gemini skills list --all
   python3 skill_audit.py --strict
-For Antigravity use ~/.gemini/config/skills/ — the other Antigravity paths are
-flagged non-portable.
+For Antigravity use the documented global path
+~/.gemini/config/skills/. Workspace skills use .agents/skills/ with backward
+support for .agent/skills/. Older global ~/.gemini/antigravity/skills/ and
+~/.gemini/antigravity-cli/skills/ paths are flagged non-portable.
 
 A clean audit means discoverable, parseable, within budget. Whether the agent
 activates the skill on a given prompt is only answerable by running the
@@ -194,11 +198,12 @@ evaluations.
 ## Where Gemini's model differs from the other two
 
 **No shelf flag, by design.** Claude has `disable-model-invocation`, Codex has
-`policy.allow_implicit_invocation`. Gemini has neither — `/skills disable` is an
-on/off switch, not a shelf. This is why the audit reports Gemini and Antigravity
-as `UNKNOWN` and excludes them from budget math, and why the block above pushes
-harder on description precision than the other two do: in Gemini it's the only
-lever.
+`policy.allow_implicit_invocation`. Gemini has neither — `skills.disabled` is an
+on/off switch, not a shelf. The audit therefore reports valid Gemini settings as
+`POCKET` or `DISABLED`, counts enabled Gemini listing text without inventing a
+limit, and leaves only Antigravity at `UNKNOWN`. The block above still pushes
+harder on description precision: for an enabled Gemini skill, wording is the
+routing lever.
 
 **Activation is a tool call with a consent step.** The model calls
 `activate_skill`, you approve access to the skill's directory path, then the
@@ -207,13 +212,14 @@ approval is per-directory, so the whole directory should be safe to hand over;
 and there's a human in the loop, which makes an over-eager description annoying
 rather than dangerous.
 
-**Discovery is four tiers, and the within-tier rule is now documented.**
+**Discovery is four documented tiers; the within-tier alias tie remains an
+observation.**
 Workspace (`.gemini/skills/`) > user (`~/.gemini/skills/` or `~/.agents/skills/`)
 > extension > built-in, with `.agents/skills/` beating `.gemini/skills/` inside a
-tier. This repo currently describes that within-tier preference as
-"community-observed, not vendor-documented" in `README.md`, `living-manual.md`,
-and `library-model.md` — the current Gemini CLI docs state it outright, so those
-three hedges are now stale and worth updating.
+tier in current first-party runtime output. The current Gemini CLI docs call the
+two locations aliases and document the surrounding tiers, but do not specify a
+tie-break between aliases. The auditor therefore keeps that tie-break labeled as
+observed rather than vendor-documented.
 
 **`SKILL.md` may sit one level deep or at the skills-directory root.** Gemini
 accepts `.gemini/skills/SKILL.md` as well as `.gemini/skills/<name>/SKILL.md`.

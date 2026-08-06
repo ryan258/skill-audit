@@ -22,13 +22,14 @@ try:  # Python 3.11+.  The fallback keeps the promised clean-Mac support.
 except ImportError:  # pragma: no cover - exercised on macOS Python 3.9/3.10
     tomllib = None
 
-VERSION = "1.1.0"
-PATHS_VERIFIED = "2026-08-04"
-# Re-verified 2026-08-04 against primary vendor sources, not summaries:
+VERSION = "1.2.0"
+PATHS_VERIFIED = "2026-08-06"
+# Re-verified 2026-08-06 against primary vendor sources, not summaries:
 #   Claude    code.claude.com/docs/en/skills  -> ~/.claude/skills, enterprise>personal>project
 #   Codex     learn.chatgpt.com/docs/build-skills -> $HOME/.agents/skills, /etc/codex/skills
 #   Gemini    github.com/google-gemini/gemini-cli docs/cli/using-agent-skills.md
-#   Antigravity  community write-ups only; still no vendor doc.
+#   Antigravity antigravity.google/docs/skills -> ~/.gemini/config/skills,
+#               workspace .agents/skills (plus legacy .agent/skills)
 # Re-verify quarterly: vendors have moved them.
 GLOBAL_PATHS = {
     "claude": ("~/.claude/skills",),
@@ -50,10 +51,10 @@ GLOBAL_PATHS = {
         "~/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/*/*/skills",
     ),
 }
-ANTIGRAVITY_NON_PORTABLE = (
-    "~/.gemini/antigravity/skills", "~/.gemini/antigravity-cli/skills"
-)
+ANTIGRAVITY_NON_PORTABLE = ("~/.gemini/antigravity/skills",
+                            "~/.gemini/antigravity-cli/skills")
 TOOLS = ("claude", "codex", "gemini", "antigravity", "claude-desktop")
+INVOCATION_STATES = ("POCKET", "SHELF", "UNKNOWN", "DISABLED")
 # Skills only compete with others in the same listing. Claude Desktop's library
 # syncs from the account and never shares a listing with the local filesystem
 # one, so a name present in both is two libraries agreeing, not a collision —
@@ -70,9 +71,8 @@ VENDOR_MARKERS = ("/.system/",)
 QUALITY_CODES = {"thin_description", "bloated_description", "missing_trigger",
                  "vague_description", "late_job_noun", "oversized_body",
                  "unknown_field", "overlap", "intent_shadow",
-                 # A vendor's malformed frontmatter is as unfixable as its
-                 # wording: Codex ships skill-creator with a nested `metadata:`
-                 # block this parser cannot read, and no edit of yours changes it.
+                 # A vendor's malformed/unsupported frontmatter is as
+                 # unfixable as its wording; no edit of yours changes it.
                  "unparseable_field"}
 CONTEXT_WINDOW_DEFAULT = 200000  # conservative default when config is absent
 CLAUDE_ENTRY_CAP = 1536
@@ -85,11 +85,17 @@ STOPWORDS = {
     "more", "most", "then", "than", "these", "those", "what", "which", "does",
     "create", "generate", "write", "make", "help", "content", "and", "the", "for",
     "are", "you", "your", "our", "all", "can", "but", "not", "only", "any",
+    # Trigger boilerplate carries no job ownership signal. Personal skills use
+    # "Ryan says" where portable skills use "the user asks"; timing verbs are
+    # likewise routing syntax, not evidence that two jobs overlap.
+    "ryan", "say", "says", "before", "after", "start", "end", "work", "build",
+    "building", "something",
 }
 VAGUE_WORDS = {"helps", "help", "general", "various", "anything", "assists", "assist", "things"}
 FINDING_CODES = {
     "no_frontmatter", "unparseable_field", "unknown_field", "missing_description",
-    "name_mismatch", "thin_description", "bloated_description", "missing_trigger",
+    "name_mismatch", "invalid_name", "invalid_description", "invalid_compatibility",
+    "invalid_metadata", "thin_description", "bloated_description", "missing_trigger",
     "vague_description", "late_job_noun", "oversized_body", "broken_symlink",
     "double_link", "non_portable_path", "mode_disagreement", "name_collision",
     "overlap", "budget_exceeded", "entry_cap_exceeded", "pocket_count",
@@ -120,6 +126,7 @@ CONFIG_SHAPE = {
 }
 BOOLS = {"true": True, "yes": True, "on": True, "1": True,
          "false": False, "no": False, "off": False, "0": False}
+SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 def finding(severity: str, code: str, message: str, skill: str = "",
@@ -234,10 +241,15 @@ def parse_frontmatter(text: str, nested_policy: bool = False) -> Tuple[Optional[
                 if lines[i].strip() and not lines[i].lstrip().startswith("#"):
                     children.append((lines[i], i + 1))
             if not children:
-                data[key] = ""
+                data[key] = {} if key == "metadata" else ""
                 i += 1
                 continue
-            if nested_policy:
+            # Agent Skills defines `metadata` as a string-to-string mapping.
+            # Other blank-valued frontmatter fields remain block lists unless
+            # the caller explicitly asks for the nested openai.yaml policy
+            # subset. Treating every mapping as a list made valid portable
+            # metadata look malformed.
+            if nested_policy or key == "metadata":
                 mapping = {}
                 for child, child_line in children:
                     child_match = re.match(r"^\s+([A-Za-z0-9_-]+):[ ](.*)$", child)
@@ -344,7 +356,7 @@ def desktop_states(skill_dir: Path) -> Optional[bool]:
 
     This is Desktop's equivalent of disable-model-invocation, and reading it
     beats assuming POCKET: the field demonstrably exists, so guessing would be
-    the same mistake as guessing Gemini's mode instead of reporting UNKNOWN.
+    the same mistake as inventing any other host state without a readable flag.
     Returns None when the manifest is missing or unreadable, which the caller
     reports as UNKNOWN. Only a literal JSON boolean counts: an entry with no
     'enabled' key, or a truthy stand-in like "true" or 1, is an absent signal,
@@ -376,11 +388,12 @@ def path_family(root: Path) -> str:
     under ~/.agents still has its own .claude/skills classified as claude.
     """
     for part in reversed(Path(root).parts):
-        if part in (".agents", ".gemini", ".claude", ".codex"): return part[1:]
+        if part in (".agents", ".agent", ".gemini", ".claude", ".codex"): return part[1:]
     return "other"
 
 
-def scan_root(root: Path, tool: str, label: str, nested: bool = False) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def scan_root(root: Path, tool: str, label: str, nested: bool = False,
+              repo_context: Optional[str] = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     records, problems = [], []
     if root.is_symlink() and not root.exists():
         return records, [finding("warning", "broken_symlink", "Broken symlink", path=str(root))]
@@ -399,7 +412,7 @@ def scan_root(root: Path, tool: str, label: str, nested: bool = False) -> Tuple[
             problems.append(finding("warning", "broken_symlink", "Broken skill path", path=str(skill_dir))); continue
         records.append({"source": str(skill_dir), "real_path": real, "file": str(file_path),
                         "tool": tool, "label": label, "nested": nested,
-                        "precedence_key": prec_key})
+                        "precedence_key": prec_key, "repo_context": repo_context})
     return records, problems
 
 
@@ -441,20 +454,261 @@ PRUNE_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist",
 
 def project_roots(repo: Path) -> Iterable[Tuple[Path, str, bool]]:
     direct = ((repo / ".claude/skills", "claude"), (repo / ".agents/skills", "codex"),
-              (repo / ".agents/skills", "gemini"), (repo / ".gemini/skills", "gemini"))
+              (repo / ".agents/skills", "gemini"), (repo / ".gemini/skills", "gemini"),
+              (repo / ".agents/skills", "antigravity"),
+              (repo / ".agent/skills", "antigravity"))
     for path, tool in direct: yield path, tool, False
     try:
         for current, dirs, _ in os.walk(repo, followlinks=False):
             current_path = Path(current)
             dirs[:] = [d for d in dirs if d not in PRUNE_DIRS]
             if current_path == repo: continue
-            for marker, tool in ((".claude", "claude"), (".agents", "codex"), (".agents", "gemini"), (".gemini", "gemini")):
+            for marker, tool in ((".claude", "claude"), (".agents", "codex"),
+                                 (".agents", "gemini"), (".gemini", "gemini"),
+                                 (".agents", "antigravity"), (".agent", "antigravity")):
                 candidate = current_path / marker / "skills"
                 if candidate.exists():
                     yield candidate, tool, True
                     if marker in dirs: dirs.remove(marker)
     except OSError:
         return
+
+
+def expand_for_home(raw: str, home: Path) -> Path:
+    """Expand a leading ~/ against the audited home, including test homes."""
+    if raw == "~": return home
+    if raw.startswith("~/"): return home / raw[2:]
+    return Path(raw)
+
+
+def toml_value_prefix(value: str) -> str:
+    """Drop a TOML inline comment without treating # inside quotes as one."""
+    quote = ""
+    escaped = False
+    kept = []
+    for character in value.strip():
+        if escaped:
+            kept.append(character); escaped = False; continue
+        if character == "\\" and quote == '"':
+            kept.append(character); escaped = True; continue
+        if character in ("'", '"'):
+            quote = "" if quote == character else (character if not quote else quote)
+        if character == "#" and not quote: break
+        kept.append(character)
+    return "".join(kept).strip()
+
+
+def parse_toml_string(value: str) -> Optional[str]:
+    """Parse the basic/literal strings used by Codex skill config entries."""
+    value = toml_value_prefix(value)
+    if len(value) < 2 or value[0] not in ("'", '"') or value[-1] != value[0]:
+        return None
+    if value[0] == "'": return value[1:-1]
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, str) else None
+
+
+def codex_skill_config(home: Path) -> Tuple[Dict[str, bool], Optional[str]]:
+    """Read Codex's [[skills.config]] path/enabled overrides.
+
+    The narrow fallback deliberately scans only this documented array-of-tables
+    shape. It therefore works on macOS Python 3.9 without pretending to parse
+    unrelated modern TOML in the rest of ~/.codex/config.toml.
+    """
+    config_path = home / ".codex/config.toml"
+    if not config_path.exists(): return {}, None
+    text, error = safe_read(config_path)
+    if error:
+        return {}, error
+    if text is None:
+        return {}, None
+    entries: List[Dict[str, Any]] = []
+    parsed_error = None
+    if tomllib:
+        try:
+            document = tomllib.loads(text)
+            skills_table = document.get("skills") or {}
+            if not isinstance(skills_table, dict):
+                parsed_error = "skills is not a table"
+            else:
+                raw_entries = skills_table.get("config", [])
+                if not isinstance(raw_entries, list):
+                    parsed_error = "skills.config is not an array of tables"
+                else:
+                    entries = [item for item in raw_entries if isinstance(item, dict)]
+                    if len(entries) != len(raw_entries):
+                        parsed_error = "skills.config contains a non-table entry"
+        except (ValueError, AttributeError) as exc:
+            parsed_error = str(exc)
+    if not entries:
+        current: Optional[Dict[str, Any]] = None
+        fallback_section = ""
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if line == "[[skills.config]]":
+                if current is not None: entries.append(current)
+                current = {}
+                fallback_section = "skills.config"
+                continue
+            if line.startswith("["):
+                if current is not None: entries.append(current)
+                current = None
+                fallback_section = "skills" if line == "[skills]" else ""
+                continue
+            if current is None:
+                if fallback_section == "skills" and re.match(r"^config\s*=", line):
+                    parsed_error = parsed_error or "skills.config is not an array of tables"
+                continue
+            item = re.match(r"^(path|enabled)\s*=\s*(.+)$", line)
+            if not item: continue
+            key, raw_value = item.groups()
+            if key == "path": current[key] = parse_toml_string(raw_value)
+            else:
+                value = toml_value_prefix(raw_value).lower()
+                current[key] = {"true": True, "false": False}.get(value)
+        if current is not None: entries.append(current)
+    result = {}
+    malformed = False
+    for entry in entries:
+        raw_path, enabled = entry.get("path"), entry.get("enabled", True)
+        if not isinstance(raw_path, str) or not isinstance(enabled, bool):
+            malformed = True; continue
+        candidate = expand_for_home(raw_path, home)
+        if candidate.name == "SKILL.md": candidate = candidate.parent
+        result[str(candidate.resolve(strict=False))] = enabled
+    problems = []
+    if parsed_error: problems.append(parsed_error)
+    if malformed: problems.append("one or more [[skills.config]] entries have an invalid path or enabled value")
+    return result, "; ".join(problems) or None
+
+
+def claude_skill_overrides(home: Path) -> Tuple[Dict[str, str], Optional[str]]:
+    """Read Claude Code's user-level skillOverrides setting."""
+    settings_path = home / ".claude/settings.json"
+    if not settings_path.exists(): return {}, None
+    text, error = safe_read(settings_path)
+    if error:
+        return {}, error
+    if text is None:
+        return {}, None
+    try:
+        document = json.loads(text)
+        overrides = document.get("skillOverrides", {})
+    except (ValueError, AttributeError) as exc:
+        return {}, str(exc)
+    if not isinstance(overrides, dict):
+        return {}, "skillOverrides is not an object"
+    allowed = {"on", "name-only", "user-invocable-only", "off"}
+    result = {name: value for name, value in overrides.items()
+              if isinstance(name, str) and isinstance(value, str) and value in allowed}
+    if len(result) != len(overrides):
+        return result, "skillOverrides contains an unsupported name or mode"
+    return result, None
+
+
+def gemini_system_settings_paths() -> Tuple[Path, Path]:
+    """Persistent Gemini CLI system-default and system-override locations."""
+    defaults_override = os.environ.get("GEMINI_CLI_SYSTEM_DEFAULTS_PATH")
+    settings_override = os.environ.get("GEMINI_CLI_SYSTEM_SETTINGS_PATH")
+    if sys.platform == "darwin":
+        base = Path("/Library/Application Support/GeminiCli")
+    elif os.name == "nt":  # pragma: no cover - exercised on Windows
+        base = Path(os.environ.get("PROGRAMDATA", "C:/ProgramData")) / "gemini-cli"
+    else:  # pragma: no cover - exercised on Linux
+        base = Path("/etc/gemini-cli")
+    return (Path(defaults_override) if defaults_override else base / "system-defaults.json",
+            Path(settings_override) if settings_override else base / "settings.json")
+
+
+def gemini_settings_layer(path: Path) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Read only the persistent Gemini fields that affect skill visibility."""
+    if not path.exists(): return {}, None
+    text, error = safe_read(path)
+    if error: return {}, error
+    try:
+        document = json.loads(text or "")
+    except ValueError as exc:
+        return {}, str(exc)
+    if not isinstance(document, dict): return {}, "top level is not an object"
+    layer: Dict[str, Any] = {}
+    problems = []
+    if "skills" in document:
+        skills = document["skills"]
+        if not isinstance(skills, dict):
+            problems.append("skills is not an object")
+        else:
+            if "enabled" in skills:
+                if isinstance(skills["enabled"], bool): layer["enabled"] = skills["enabled"]
+                else: problems.append("skills.enabled is not a boolean")
+            if "disabled" in skills:
+                disabled = skills["disabled"]
+                if isinstance(disabled, list) and all(isinstance(name, str) and name for name in disabled):
+                    layer["disabled"] = set(disabled)
+                else:
+                    problems.append("skills.disabled is not a list of non-empty strings")
+    if "admin" in document:
+        admin = document["admin"]
+        if not isinstance(admin, dict):
+            problems.append("admin is not an object")
+        elif "skills" in admin:
+            admin_skills = admin["skills"]
+            if not isinstance(admin_skills, dict):
+                problems.append("admin.skills is not an object")
+            elif "enabled" in admin_skills:
+                if isinstance(admin_skills["enabled"], bool):
+                    layer["admin_enabled"] = admin_skills["enabled"]
+                else:
+                    problems.append("admin.skills.enabled is not a boolean")
+    return layer, "; ".join(problems) or None
+
+
+def gemini_skill_contexts(home: Path, repos: Iterable[str]) -> Tuple[Dict[Optional[str], Dict[str, Any]], Dict[str, str]]:
+    """Resolve Gemini's persistent settings for each audited workspace.
+
+    `skills.disabled` uses union merging. Boolean flags use normal precedence:
+    defaults, system defaults, user, workspace, then the system override. An
+    explicitly passed repo is treated as the workspace context being audited.
+    """
+    repo_paths = []
+    for raw in repos:
+        resolved = str(Path(raw).expanduser().resolve(strict=False))
+        if resolved not in repo_paths: repo_paths.append(resolved)
+    context_keys: List[Optional[str]] = repo_paths or [None]
+    # Tests and callers that inject an alternate home must not inherit the real
+    # machine's admin settings. The public CLI has no --home flag; this branch is
+    # solely the dependency-free test seam used throughout this module.
+    include_system = home.resolve(strict=False) == Path.home().resolve(strict=False)
+    system_defaults, system_override = gemini_system_settings_paths()
+    cache: Dict[str, Tuple[Dict[str, Any], Optional[str]]] = {}
+    errors: Dict[str, str] = {}
+
+    def read(path: Path) -> Dict[str, Any]:
+        key = str(path)
+        if key not in cache: cache[key] = gemini_settings_layer(path)
+        layer, problem = cache[key]
+        if problem: errors[key] = problem
+        return layer
+
+    contexts: Dict[Optional[str], Dict[str, Any]] = {}
+    for repo in context_keys:
+        paths = []
+        if include_system: paths.append(system_defaults)
+        paths.append(home / ".gemini/settings.json")
+        if repo is not None: paths.append(Path(repo) / ".gemini/settings.json")
+        if include_system: paths.append(system_override)
+        enabled, admin_enabled, disabled, valid = True, True, set(), True
+        for path in paths:
+            layer = read(path)
+            if str(path) in errors: valid = False
+            if "enabled" in layer: enabled = layer["enabled"]
+            if "admin_enabled" in layer: admin_enabled = layer["admin_enabled"]
+            disabled |= layer.get("disabled", set())
+        contexts[repo] = {"enabled": enabled and admin_enabled,
+                          "disabled": disabled, "valid": valid}
+    return contexts, errors
 
 
 def parse_config(path: Path) -> Tuple[Dict[str, Any], Optional[str]]:
@@ -533,7 +787,52 @@ def quoted_phrases(description: str) -> Set[str]:
     return {match.group(2).lower() for match in re.finditer(r"(['\"])(.+?)\1", description) if match.group(2).strip()}
 
 
-def classify_skill(real_path: str, entries: List[Dict[str, Any]], findings: List[Dict[str, Any]]) -> Dict[str, Any]:
+def reciprocal_boundary(first: Dict[str, Any], second: Dict[str, Any]) -> bool:
+    """Both descriptions name the adjacent skill and explicitly decline it."""
+    markers = ("do not use", "don't use", "hand ", "handoff")
+    first_text, second_text = first["description"].casefold(), second["description"].casefold()
+    return (second["name"].casefold() in first_text and any(mark in first_text for mark in markers)
+            and first["name"].casefold() in second_text and any(mark in second_text for mark in markers))
+
+
+def gemini_invocation_state(name: str, entries: List[Dict[str, Any]],
+                             contexts: Dict[Optional[str], Dict[str, Any]]) -> Tuple[str, Optional[str]]:
+    """Collapse workspace-specific Gemini settings into the audit vocabulary.
+
+    A global occurrence is visible in every audited workspace, so POCKET in any
+    context wins the broad library state. A project-only occurrence uses only
+    the workspace(s) from which that real bundle was discovered.
+    """
+    gemini_entries = [entry for entry in entries if entry["tool"] == "gemini"]
+    if not gemini_entries or not contexts: return "UNKNOWN", None
+    if any(entry.get("repo_context") is None for entry in gemini_entries):
+        relevant = list(contexts.values())
+    else:
+        keys = {entry.get("repo_context") for entry in gemini_entries}
+        relevant = [contexts[key] for key in keys if key in contexts]
+    if not relevant: return "UNKNOWN", None
+    outcomes = []
+    for context in relevant:
+        if not context.get("valid", False): outcomes.append("UNKNOWN")
+        elif not context.get("enabled", True) or name in context.get("disabled", set()):
+            outcomes.append("DISABLED")
+        else:
+            outcomes.append("POCKET")
+    if "POCKET" in outcomes: state = "POCKET"
+    elif "UNKNOWN" in outcomes: state = "UNKNOWN"
+    else: state = "DISABLED"
+    override = None
+    if outcomes and all(outcome == "DISABLED" for outcome in outcomes): override = "disabled"
+    elif "DISABLED" in outcomes: override = "mixed"
+    return state, override
+
+
+def classify_skill(real_path: str, entries: List[Dict[str, Any]], findings: List[Dict[str, Any]],
+                   claude_overrides: Optional[Dict[str, str]] = None,
+                   codex_config: Optional[Dict[str, bool]] = None,
+                   gemini_contexts: Optional[Dict[Optional[str], Dict[str, Any]]] = None,
+                   claude_config_valid: bool = True,
+                   codex_config_valid: bool = True) -> Dict[str, Any]:
     skill_dir = Path(real_path)
     text, error = safe_read(skill_dir / "SKILL.md")
     name = skill_dir.name
@@ -557,11 +856,40 @@ def classify_skill(real_path: str, entries: List[Dict[str, Any]], findings: List
     if not isinstance(description, str) or not description.strip():
         findings.append(finding("error", "missing_description", "Missing or unreadable description", name, real_path))
         description = ""
-    if "name" in parsed and parsed["name"] != name:
-        findings.append(finding("warning", "name_mismatch", "Frontmatter name does not match directory name", name, real_path))
+    directory_name_valid = len(name) <= 64 and bool(SKILL_NAME_RE.fullmatch(name))
+    if not directory_name_valid:
+        findings.append(finding("error", "invalid_name",
+                                "Directory name must be 1-64 lowercase letters, digits, and single hyphens",
+                                name, real_path))
+    if "name" in parsed:
+        declared_name = parsed["name"]
+        declared_name_valid = (isinstance(declared_name, str) and len(declared_name) <= 64
+                               and bool(SKILL_NAME_RE.fullmatch(declared_name)))
+        if not declared_name_valid and (declared_name != name or directory_name_valid):
+            findings.append(finding("error", "invalid_name",
+                                    "Frontmatter name must be 1-64 lowercase letters, digits, and single hyphens",
+                                    name, real_path))
+        if declared_name != name:
+            findings.append(finding("warning", "name_mismatch", "Frontmatter name does not match directory name", name, real_path))
+    compatibility = parsed.get("compatibility")
+    if "compatibility" in parsed and (not isinstance(compatibility, str)
+                                      or not compatibility or len(compatibility) > 500):
+        findings.append(finding("error", "invalid_compatibility",
+                                "Compatibility must be a non-empty string of at most 500 characters",
+                                name, real_path))
+    metadata = parsed.get("metadata")
+    if "metadata" in parsed and (not isinstance(metadata, dict)
+                                 or not all(isinstance(key, str) and isinstance(value, str)
+                                            for key, value in metadata.items())):
+        findings.append(finding("error", "invalid_metadata",
+                                "Metadata must be a string-to-string mapping", name, real_path))
     if description:
         if len(description) < 40: findings.append(finding("warning", "thin_description", "Description is under 40 characters", name, real_path))
-        if len(description) > 500: findings.append(finding("warning", "bloated_description", "Description exceeds 500 characters", name, real_path))
+        if len(description) > 1024:
+            findings.append(finding("error", "invalid_description",
+                                    "Description exceeds the portable 1024-character maximum", name, real_path))
+        elif len(description) > 500:
+            findings.append(finding("warning", "bloated_description", "Description exceeds 500 characters", name, real_path))
         if not re.search(r"\b(use (?:when|before|after|at the (?:start|end) of)|trigger|when (the )?user|for .* requests?)\b", description, re.I):
             findings.append(finding("warning", "missing_trigger", "Description lacks trigger language", name, real_path))
         if is_vague(description):
@@ -594,22 +922,49 @@ def classify_skill(real_path: str, entries: List[Dict[str, Any]], findings: List
         codex_shelf = parsed_bool is False
     visible = {entry["tool"] for entry in entries}
     desktop_enabled = desktop_states(skill_dir) if DESKTOP in visible else None
+    claude_overrides = claude_overrides or {}
+    codex_config = codex_config or {}
+    host_overrides: Dict[str, str] = {}
+    listing_descriptions = {tool: description for tool in visible}
     states = {}
     for tool in TOOLS:
         if tool not in visible: continue
-        if tool == "claude": states[tool] = "SHELF" if claude_shelf else "POCKET"
-        elif tool == "codex": states[tool] = "SHELF" if codex_shelf else "POCKET"
+        if tool == "claude":
+            override = claude_overrides.get(name)
+            if override:
+                host_overrides[tool] = override
+            if not claude_config_valid: states[tool] = "UNKNOWN"
+            elif override == "off": states[tool] = "DISABLED"
+            elif override == "user-invocable-only": states[tool] = "SHELF"
+            elif override in ("on", "name-only"):
+                states[tool] = "POCKET"
+                if override == "name-only": listing_descriptions[tool] = ""
+            else: states[tool] = "SHELF" if claude_shelf else "POCKET"
+        elif tool == "codex":
+            enabled = codex_config.get(str(skill_dir.resolve(strict=False)))
+            if enabled is not None: host_overrides[tool] = "enabled" if enabled else "disabled"
+            if not codex_config_valid: states[tool] = "UNKNOWN"
+            else: states[tool] = "DISABLED" if enabled is False else ("SHELF" if codex_shelf else "POCKET")
+        elif tool == "gemini":
+            states[tool], override = gemini_invocation_state(name, entries, gemini_contexts or {})
+            if override: host_overrides[tool] = override
         elif tool == DESKTOP:
             states[tool] = "UNKNOWN" if desktop_enabled is None else ("POCKET" if desktop_enabled else "SHELF")
         else: states[tool] = "UNKNOWN"
-    known = {state for state in states.values() if state != "UNKNOWN"}
+    # A POCKET/SHELF disagreement is meaningful only between hosts that expose
+    # both choices. Gemini is enabled-or-disabled, so comparing its default
+    # POCKET with an intentional Claude/Codex SHELF creates an unavoidable false
+    # warning. Desktop is a separate library and never shares this entry.
+    known = {states[tool] for tool in ("claude", "codex")
+             if states.get(tool) in ("POCKET", "SHELF")}
     if len(known) > 1:
         findings.append(finding("warning", "mode_disagreement", "Tools disagree on invocation mode", name, real_path))
     return {"name": name, "real_path": real_path, "file": str(skill_dir / "SKILL.md"),
             "library": DESKTOP if DESKTOP in visible else "local",
             "reachable_from": sorted({entry["source"] for entry in entries}), "tools": sorted(visible),
             "states": states, "line_count": line_count, "character_count": len(text or ""),
-            "description": description, "nested": any(entry["nested"] for entry in entries),
+            "description": description, "listing_descriptions": listing_descriptions,
+            "host_overrides": host_overrides, "nested": any(entry["nested"] for entry in entries),
             "references": sorted(set(REFERENCE_RE.findall(text or "")) - {name}),
             "scopes": sorted({entry["label"] for entry in entries}),
             "precedence_keys": sorted({entry["precedence_key"] for entry in entries}),
@@ -630,24 +985,26 @@ def demote_vendor_findings(findings: List[Dict[str, Any]], skills: List[Dict[str
     disagree with the findings list about the same pair.
     """
     vendor_paths = {s["real_path"] for s in skills if is_vendor(s["real_path"], s.get("library", "local"))}
-    vendor_names = {s["name"] for s in skills if is_vendor(s["real_path"], s.get("library", "local"))}
     for item in findings:
         if item["severity"] != "warning" or item["code"] not in QUALITY_CODES: continue
-        # An overlap finding carries the joined pair label, not one skill.
-        subjects = item["skill"].split(PAIR_SEPARATOR) if PAIR_SEPARATOR in item["skill"] else [item["skill"]]
-        if item["path"] in vendor_paths or (subjects and all(s in vendor_names for s in subjects if s)):
+        # Names are not identities: a local skill can legitimately have the
+        # same name as a Desktop or bundled skill. Pair findings therefore carry
+        # an explicit provenance bit from overlap_report instead of consulting a
+        # global set of vendor names.
+        if item["path"] in vendor_paths or item.get("vendor_installed") is True:
             item["severity"] = "notice"
             item["message"] += " [vendor-installed]"
     for pair in overlaps or []:
-        if pair["severity"] == "warning" and all(n in vendor_names for n in pair["skills"]):
+        if pair["severity"] == "warning" and pair.get("vendor_installed") is True:
             pair["severity"] = "notice"
-            pair["vendor_installed"] = True
 
 
 def build_report(args: argparse.Namespace) -> Dict[str, Any]:
     selected = set(args.tool or TOOLS)
     entries: List[Dict[str, Any]] = []; findings: List[Dict[str, Any]] = []; locations = []
-    home = Path.home()
+    home = Path(getattr(args, "home", None) or Path.home())
+    gemini_contexts, gemini_errors = (gemini_skill_contexts(home, args.repo)
+                                       if "gemini" in selected else ({}, {}))
     for tool in TOOLS:
         if tool not in selected: continue
         for raw in GLOBAL_PATHS[tool]:
@@ -665,11 +1022,12 @@ def build_report(args: argparse.Namespace) -> Dict[str, Any]:
         repo = Path(repo_raw).expanduser()
         if not repo.exists():
             findings.append(finding("warning", "unreadable", "Repo is not present", path=str(repo))); continue
+        repo_context = str(repo.resolve(strict=False))
         seen_roots = set()
         for root, tool, nested in project_roots(repo):
             if tool not in selected or (str(root), tool) in seen_roots: continue
             seen_roots.add((str(root), tool)); locations.append({"path": str(root), "status": "present" if root.exists() else "not present"})
-            records, problems = scan_root(root, tool, "nested" if nested else "project", nested)
+            records, problems = scan_root(root, tool, "nested" if nested else "project", nested, repo_context)
             entries.extend(records); findings.extend(problems)
     # Gemini double link is a root-level condition, not a per-skill issue.
     gemini_roots = [Path(os.path.expanduser(p)) for p in GLOBAL_PATHS["gemini"]]
@@ -683,7 +1041,21 @@ def build_report(args: argparse.Namespace) -> Dict[str, Any]:
     findings[:] = dedupe_scan_findings(findings)
     grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for entry in entries: grouped[entry["real_path"]].append(entry)
-    skills = [classify_skill(real, group, findings) for real, group in sorted(grouped.items())]
+    claude_overrides, claude_error = claude_skill_overrides(home) if "claude" in selected else ({}, None)
+    codex_config, codex_error = codex_skill_config(home) if "codex" in selected else ({}, None)
+    if claude_error:
+        findings.append(finding("warning", "config_error", "Cannot read Claude skillOverrides: %s" % claude_error,
+                                path=str(home / ".claude/settings.json")))
+    if codex_error:
+        findings.append(finding("warning", "config_error", "Cannot read Codex skills.config: %s" % codex_error,
+                                path=str(home / ".codex/config.toml")))
+    for path, problem in sorted(gemini_errors.items()):
+        findings.append(finding("warning", "config_error", "Cannot read Gemini skill settings: %s" % problem,
+                                path=path))
+    skills = [classify_skill(real, group, findings, claude_overrides, codex_config, gemini_contexts,
+                             claude_config_valid=claude_error is None,
+                             codex_config_valid=codex_error is None)
+              for real, group in sorted(grouped.items())]
     config_path = Path(args.config).expanduser() if args.config else home / ".skill-audit.toml"
     config, config_error = parse_config(config_path)
     if config_error: findings.append(finding("warning", "config_error", "Cannot parse config: %s" % config_error, path=str(config_path)))
@@ -692,9 +1064,10 @@ def build_report(args: argparse.Namespace) -> Dict[str, Any]:
         findings.append(finding("warning", "config_error", "Ignoring malformed config value: %s" % problem, path=str(config_path)))
     collisions = collision_report(skills, findings)
     dangling = reference_report(skills, findings)
-    overlaps = overlap_report(skills, config, findings)
+    overlaps = overlap_report(skills, config, findings,
+                              report_unmatched_suppress=not bool(args.tool))
     budget = budget_report(skills, config, findings)
-    pocket = pocket_report(skills, config, findings)
+    pocket = pocket_report(skills, config, findings, filtered=bool(args.tool))
     demote_vendor_findings(findings, skills, overlaps)
     recommendations = recommendations_for(findings)
     return {"meta": {"version": VERSION, "paths_verified": PATHS_VERIFIED,
@@ -725,7 +1098,7 @@ def build_report(args: argparse.Namespace) -> Dict[str, Any]:
 # note says so rather than claiming no winner can be determined.
 #
 # Gemini: workspace > user > extension > built-in (documented rules).
-# WITHIN a tier, .agents/skills beats .gemini/skills. Re-checked 2026-08-04: the
+# WITHIN a tier, .agents/skills beats .gemini/skills. Re-checked 2026-08-06: the
 # vendor doc calls the two "aliases" and states no within-tier order, so this
 # stays an observation, NOT a documented rule. The evidence is first-party
 # runtime output rather than community report -- `gemini skills list --all`
@@ -749,12 +1122,18 @@ PRECEDENCE_TEXT = {"claude": "enterprise > personal > project",
 
 def collision_winner(tool: str, group: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Resolve which occurrence of a duplicated name wins, for one tool."""
+    eligible = [skill for skill in group
+                if tool in skill["tools"] and skill.get("states", {}).get(tool) != "DISABLED"]
     if tool == "codex":
-        return {"winner": None, "tier": None, "tied": [s["real_path"] for s in group],
+        if not eligible:
+            return {"winner": None, "tier": None, "tied": [], "note": "not visible to this tool"}
+        if len(eligible) == 1:
+            return {"winner": eligible[0]["real_path"], "tier": "only enabled copy", "tied": [],
+                    "note": ""}
+        return {"winner": None, "tier": None, "tied": [s["real_path"] for s in eligible],
                 "note": "Codex does not resolve collisions; the user picks."}
     ranked = []
-    for skill in group:
-        if tool not in skill["tools"]: continue
+    for skill in eligible:
         tiers = [PRECEDENCE[tool][key] for key in skill["precedence_keys"] if key in PRECEDENCE[tool]]
         # Defensive assertion, not a normal path: every root the scanner yields
         # carries a .claude/.agents/.gemini marker, so path_family always returns
@@ -791,16 +1170,29 @@ def collision_report(skills: List[Dict[str, Any]], findings: List[Dict[str, Any]
     for (_, name), group in sorted(by_name.items()):
         if len(group) < 2: continue
         resolution = {tool: collision_winner(tool, group) for tool in ("claude", "gemini", "codex")}
+        active_tools = [tool for tool in ("claude", "gemini", "codex")
+                        if sum(1 for skill in group
+                               if tool in skill["tools"]
+                               and skill.get("states", {}).get(tool) != "DISABLED") > 1]
         results.append({"name": name,
                         "occurrences": [{"path": s["real_path"], "scopes": s["scopes"],
-                                         "precedence_keys": s["precedence_keys"], "tools": s["tools"]} for s in group],
+                                         "precedence_keys": s["precedence_keys"], "tools": s["tools"],
+                                         "states": s.get("states", {})} for s in group],
                         "paths": [s["real_path"] for s in group],
-                        "resolution": resolution, "precedence": PRECEDENCE_TEXT})
-        findings.append(finding("warning", "name_collision", "Multiple distinct skills share this name", name))
+                        "resolution": resolution, "precedence": PRECEDENCE_TEXT,
+                        "active_tools": active_tools})
+        if active_tools:
+            findings.append(finding("warning", "name_collision",
+                                    "Multiple enabled distinct skills share this name", name))
+        else:
+            findings.append(finding("notice", "name_collision",
+                                    "Multiple distinct skills share this name, but no selected host exposes both",
+                                    name))
     return results
 
 
-def overlap_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def overlap_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings: List[Dict[str, Any]],
+                   report_unmatched_suppress: bool = True) -> List[Dict[str, Any]]:
     owners = set((config.get("ownership") or {}).values())
     # A pair entry is split on the " / " separator the labels are printed with,
     # not on any slash: a label is a real path when two skills share a name, and
@@ -834,6 +1226,12 @@ def overlap_report(skills: List[Dict[str, Any]], config: Dict[str, Any], finding
                 if severity == "notice" and first["name"] not in owners and second["name"] not in owners: severity = "warning"
             else:
                 severity = "notice"
+            bounded = reciprocal_boundary(first, second)
+            if bounded:
+                # A named two-way decline is evidence that the shared language
+                # is a deliberate handoff. Keep it visible for human review,
+                # but do not fail strict as though ownership were unresolved.
+                severity = "notice"
             # Two copies of one name are a real pair; label them by path so the
             # output is not the useless "brand-voice / brand-voice".
             if first["name"] == second["name"]:
@@ -848,23 +1246,31 @@ def overlap_report(skills: List[Dict[str, Any]], config: Dict[str, Any], finding
             used_names |= matched_names
             is_suppressed = bool(matched_pairs or matched_names)
 
+            vendor_pair = (is_vendor(first.get("real_path", ""), first.get("library", "local"))
+                           and is_vendor(second.get("real_path", ""), second.get("library", "local")))
             item = {"skills": [first["name"], second["name"]], "labels": labels, "shared_terms": shared,
                     "shared_term_count": count, "shared_quoted_phrases": phrases, "severity": severity,
-                    "shadowed_phrases": shadows, "suppressed": is_suppressed}
+                    "shadowed_phrases": shadows, "suppressed": is_suppressed,
+                    "vendor_installed": vendor_pair, "reciprocal_boundary": bounded}
             results.append(item)
             if not is_suppressed:
                 if count > 2 or phrases:
-                    findings.append(finding(severity, "overlap", "These two may overlap — read them (shared terms: %d)" % count, PAIR_SEPARATOR.join(labels)))
+                    overlap_finding = finding(severity, "overlap",
+                                              "These two may overlap — read them (shared terms: %d)" % count,
+                                              PAIR_SEPARATOR.join(labels))
+                    overlap_finding["vendor_installed"] = vendor_pair
+                    findings.append(overlap_finding)
                 for shorter, longer in shadows:
                     findings.append(finding("notice", "intent_shadow",
                                             "Trigger '%s' is contained in '%s' — read both (routing is the model's call, not a rule)" % (shorter, longer),
                                             PAIR_SEPARATOR.join(labels)))
     # A mute list that can rot invisibly is worse than no mute list: a renamed
     # skill or a typo would otherwise stop suppressing and never say so.
-    stale = sorted(PAIR_SEPARATOR.join(pair) for pair in suppressed_pairs - used_pairs)
-    stale += sorted(suppressed_names - used_names)
-    for entry in stale:
-        findings.append(finding("warning", "suppress_unmatched", "Config suppresses an overlap that was not detected", entry))
+    if report_unmatched_suppress:
+        stale = sorted(PAIR_SEPARATOR.join(pair) for pair in suppressed_pairs - used_pairs)
+        stale += sorted(suppressed_names - used_names)
+        for entry in stale:
+            findings.append(finding("warning", "suppress_unmatched", "Config suppresses an overlap that was not detected", entry))
     return results
 
 
@@ -909,22 +1315,25 @@ def budget_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings
     result = {"context_window": window, "claude": {"total": 0, "limit": int(window * CLAUDE_BUDGET_FRACTION), "pocket_skills": 0},
               "codex": {"total": 0, "limit": min(8000, int(window * CODEX_BUDGET_FRACTION)), "pocket_skills": 0},
               # Counted but not judged: no published listing budget exists for
-              # Desktop, and inventing a limit would manufacture a pass/fail the
-              # vendor never stated. The total is the useful part.
+              # Gemini or Desktop, and inventing a limit would manufacture a
+              # pass/fail the vendor never stated. The total is the useful part.
+              "gemini": {"total": 0, "limit": None, "pocket_skills": 0, "status": "not measured"},
               DESKTOP: {"total": 0, "limit": None, "pocket_skills": 0, "status": "not measured"},
               "excluded_unknown": 0}
     for skill in skills:
-        chars = len(skill["name"]) + len(skill["description"])
         # Each tool's budget counts only what that tool can see. A skill being
-        # UNKNOWN in Gemini says nothing about Claude's or Codex's listing.
-        for tool in ("claude", "codex", DESKTOP):
+        # UNKNOWN in another host says nothing about this tool's listing.
+        for tool in ("claude", "codex", "gemini", DESKTOP):
             if skill["states"].get(tool) == "POCKET":
+                visible_description = skill.get("listing_descriptions", {}).get(tool, skill["description"])
+                chars = len(skill["name"]) + len(visible_description)
                 result[tool]["total"] += chars
                 result[tool]["pocket_skills"] += 1
         # Excluded entirely: no tool with a readable invocation mode can see it.
-        if not {"claude", "codex", DESKTOP} & set(skill["states"]) and "UNKNOWN" in skill["states"].values():
+        if not {"claude", "codex", "gemini", DESKTOP} & set(skill["states"]) and "UNKNOWN" in skill["states"].values():
             result["excluded_unknown"] += 1
-        if "claude" in skill["states"] and chars > CLAUDE_ENTRY_CAP:
+        claude_chars = len(skill["name"]) + len(skill.get("listing_descriptions", {}).get("claude", skill["description"]))
+        if skill["states"].get("claude") == "POCKET" and claude_chars > CLAUDE_ENTRY_CAP:
             findings.append(finding("warning", "entry_cap_exceeded", "Claude listing entry exceeds %d characters" % CLAUDE_ENTRY_CAP, skill["name"], skill["real_path"]))
     for tool in ("claude", "codex"):
         result[tool]["status"] = "over" if result[tool]["total"] > result[tool]["limit"] else "pass"
@@ -932,7 +1341,8 @@ def budget_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings
     return result
 
 
-def pocket_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings: List[Dict[str, Any]]) -> Dict[str, Any]:
+def pocket_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings: List[Dict[str, Any]],
+                  filtered: bool = False) -> Dict[str, Any]:
     intended = set((config.get("pocket") or {}).get("skills", []))
     # The audit-wide rule: pocket in ANY tool counts as pocket, because one
     # tool auto-invoking it is enough to cost you context and surprise you.
@@ -959,6 +1369,8 @@ def pocket_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings
         if pocket_count > 5: findings.append(finding("warning", "pocket_count", "More than five pocket skills and no config is present"))
         return {"configured": False, "rule": rule, "pocket_count": pocket_count, "correct": [],
                 "intended_shelf_but_pocket": [], "intended_pocket_but_shelf": [], "project_pocket": [],
+                "intended_mode_unknown": [], "intended_not_visible": [],
+                "intended_selected_nonpocket": [],
                 "desktop_pocket": desktop_pocket}
     # A repo's own skills are not governed by a global pocket list, so comparing
     # them against it produced false "intended shelf" hits. They are counted and
@@ -968,21 +1380,36 @@ def pocket_report(skills: List[Dict[str, Any]], config: Dict[str, Any], findings
     actual = actual - set(project_pocket)
     rule += "; the config comparison covers global-scope skills only"
     rule += "; Claude Desktop's library is counted but not measured against it"
+    if filtered:
+        rule += ("; configured names absent or non-pocket in the selected tools are not judged "
+                 "missing/shelved because an excluded host may satisfy the any-tool intent")
     # A configured name with no skill on disk is a stale config or a typo, not
     # a flag added by mistake. Reporting it as the latter sends you hunting for
     # a file that is not there.
-    known = {s["name"] for s in local_skills}
+    governed_skills = [s for s in local_skills
+                       if {"global", "non-portable"} & set(s.get("scopes", []))]
+    known = {s["name"] for s in governed_skills}
+    known_nonpocket = {s["name"] for s in governed_skills
+                       if any(state in ("SHELF", "DISABLED") for state in s["states"].values())}
     correct = sorted(intended & actual)
     shelf_but_pocket = sorted(actual - intended)
-    pocket_but_shelf = sorted((intended - actual) & known)
-    missing = sorted(intended - known)
+    selected_nonpocket = sorted((intended - actual) & known_nonpocket) if filtered else []
+    pocket_but_shelf = [] if filtered else sorted((intended - actual) & known_nonpocket)
+    mode_unknown = sorted(((intended - actual) & known) - known_nonpocket)
+    not_visible = sorted(intended - known) if filtered else []
+    missing = [] if filtered else sorted(intended - known)
     for name in shelf_but_pocket: findings.append(finding("warning", "intended_shelf_pocket", "Intended shelf skill is actually pocket", name))
-    for name in pocket_but_shelf: findings.append(finding("warning", "intended_pocket_shelf", "Intended pocket skill is not actually pocket", name))
+    for name in pocket_but_shelf:
+        findings.append(finding("warning", "intended_pocket_shelf",
+                                "Intended pocket skill is SHELF or DISABLED", name))
     for name in missing: findings.append(finding("warning", "intended_missing", "Config lists a pocket skill that is not installed", name))
     return {"configured": True, "rule": rule,
             "pocket_count": pocket_count, "correct": correct,
             "intended_shelf_but_pocket": shelf_but_pocket, "intended_pocket_but_shelf": pocket_but_shelf,
-            "intended_but_not_installed": missing, "project_pocket": project_pocket,
+            "intended_mode_unknown": mode_unknown, "intended_not_visible": not_visible,
+            "intended_selected_nonpocket": selected_nonpocket,
+            "intended_but_not_installed": missing,
+            "project_pocket": project_pocket,
             "desktop_pocket": desktop_pocket}
 
 
@@ -1041,7 +1468,10 @@ def lines_for(report: Dict[str, Any], quiet: bool = False) -> List[str]:
         for tool in ("claude", "gemini", "codex"):
             resolution = item["resolution"][tool]
             if resolution["winner"]:
-                verdict = "%s wins (%s tier)" % (resolution["winner"], resolution["tier"])
+                if resolution["tier"] == "only enabled copy":
+                    verdict = "%s is the only enabled copy" % resolution["winner"]
+                else:
+                    verdict = "%s wins (%s tier)" % (resolution["winner"], resolution["tier"])
             else:
                 verdict = resolution["note"] or "no winner"
             collisions.append("    %-8s %s" % (tool + ":", verdict))
@@ -1062,15 +1492,19 @@ def lines_for(report: Dict[str, Any], quiet: bool = False) -> List[str]:
         lines += section("Budget", [
             "Claude: %(total)d/%(limit)d chars across %(pocket_skills)d pocket skills (%(status)s)" % budget["claude"],
             "Codex:  %(total)d/%(limit)d chars across %(pocket_skills)d pocket skills (%(status)s)" % budget["codex"],
+            "Gemini: %(total)d chars across %(pocket_skills)d enabled skills (%(status)s — no published limit)" % budget["gemini"],
             "Desktop: %(total)d chars across %(pocket_skills)d enabled skills (%(status)s — no published limit)" % budget[DESKTOP],
-            "%d skills excluded: only Gemini/Antigravity can see them, and their mode is UNKNOWN" % budget["excluded_unknown"]])
+            "%d skills excluded: only Antigravity can see them, and its mode is UNKNOWN" % budget["excluded_unknown"]])
         pocket = report["pocket_check"]
         lines += section("Pocket check", ["rule: %s" % pocket["rule"],
                                           "(this is deliberately broader than the per-tool budgets above)",
                                           "pocket count: %d" % pocket["pocket_count"],
                                           "correct: %s" % ", ".join(pocket["correct"]),
                                           "intended shelf but pocket: %s" % ", ".join(pocket["intended_shelf_but_pocket"]),
-                                          "intended pocket but shelf: %s" % ", ".join(pocket["intended_pocket_but_shelf"]),
+                                          "intended pocket but shelf/disabled: %s" % ", ".join(pocket["intended_pocket_but_shelf"]),
+                                          "installed but selected-tool mode unknown: %s" % ", ".join(pocket.get("intended_mode_unknown", [])),
+                                          "configured pocket, but non-pocket in selected tools (not judged): %s" % ", ".join(pocket.get("intended_selected_nonpocket", [])),
+                                          "configured but not visible to selected tools: %s" % ", ".join(pocket.get("intended_not_visible", [])),
                                           "in config but not installed: %s" % ", ".join(pocket.get("intended_but_not_installed", [])),
                                           "project-scope pocket (not measured against config): %s" % ", ".join(pocket.get("project_pocket", [])),
                                           "Claude Desktop pocket (managed in the app, not this config): %s" % ", ".join(pocket.get("desktop_pocket", []))])
@@ -1079,7 +1513,7 @@ def lines_for(report: Dict[str, Any], quiet: bool = False) -> List[str]:
         # missing one reads as a bug. Naming the suppression keeps that true.
         lines += ["\nInventory, Budget, Pocket check", "-" * 30, "suppressed by --quiet (exit code is unaffected)"]
     lines += section("Recommended actions", ["%d. %s" % (i + 1, item) for i, item in enumerate(report["recommendations"])])
-    lines += ["\nPath note: these paths moved recently. Re-verify quarterly; Antigravity portable-path evidence is community testing, not official documentation."]
+    lines += ["\nPath note: these paths moved recently. Re-verify quarterly; Antigravity documents ~/.gemini/config/skills globally and .agents/skills in a workspace; legacy ~/.gemini/antigravity*/skills paths are scanned as non-portable."]
     return lines
 
 
@@ -1114,9 +1548,10 @@ def markdown_for(report: Dict[str, Any]) -> str:
 
 
 def parser() -> argparse.ArgumentParser:
-    non_goals = "Non-goals: does not detect real prose conflicts; does not fix anything; does not verify triggering; does not check Gemini or Antigravity shelf state (it reports UNKNOWN)."
+    non_goals = "Non-goals: does not detect real prose conflicts; does not fix anything; does not verify triggering; does not guess Antigravity shelf state (it reports UNKNOWN)."
     arg = argparse.ArgumentParser(description="Read-only audit of local agent skills. " + non_goals, epilog="Exit 0: clean/warnings; 1: strict warnings; 2: errors; 3: script failure. " + non_goals)
-    arg.add_argument("--repo", action="append", default=[], metavar="PATH", help="Repository to scan (repeatable)")
+    arg.add_argument("--repo", action="append", default=[], metavar="PATH",
+                     help="Repository to scan (repeatable; treated as an audit context, not proof of host folder trust)")
     arg.add_argument("--config", help="TOML config path (default ~/.skill-audit.toml)")
     arg.add_argument("--json", action="store_true", help="Emit full JSON report (wins over --format)")
     arg.add_argument("--format", choices=("text", "github"), default="text",

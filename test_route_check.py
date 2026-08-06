@@ -44,7 +44,7 @@ def test_expectation_outside_the_listing_is_skipped_not_scored():
     assert len(calls) == 2, "a skipped case must cost no model calls, got %d" % len(calls)
     lines = "\n".join(rc.report_lines(results, LISTING))
     assert "SKIP" in lines and "not in the pocket listing" in lines, lines
-    assert "1/1 cases passed every trial; 1 skipped" in lines, lines
+    assert "1/1 completed cases passed every trial; 1 skipped" in lines, lines
 
 
 def test_skipped_case_alone_does_not_fail_the_run():
@@ -52,6 +52,37 @@ def test_skipped_case_alone_does_not_fail_the_run():
     results = rc.run_cases([{"query": "q", "expected": "shelved-skill"}], LISTING, "stub", 1, 1,
                            ask=lambda *a: "NONE")
     assert not any(r["rate"] is not None and r["rate"] < 1 for r in results), results
+    assert rc.exit_code_for(results) == 0
+
+
+def test_harness_errors_are_reported_and_exit_three():
+    results = rc.run_cases([CASES[0]], LISTING, "stub", repeat=2, jobs=1,
+                           ask=lambda *a: "ERROR: claude timed out")
+    assert results[0]["errors"] == ["ERROR: claude timed out", "ERROR: claude timed out"], results
+    assert results[0]["rate"] is None, "an incomplete harness run must not receive a routing rate"
+    assert rc.exit_code_for(results) == 3, "infrastructure must not masquerade as a routing miss"
+    lines = "\n".join(rc.report_lines(results, LISTING))
+    assert "ERROR  0/2" in lines and "harness: ERROR: claude timed out" in lines, lines
+    assert "0/0 completed cases" in lines and "1 harness-error case not scored" in lines, lines
+
+    misses = rc.run_cases([CASES[0]], LISTING, "stub", repeat=1, jobs=1,
+                           ask=lambda *a: "brand-voice")
+    assert rc.exit_code_for(misses) == 1, "a genuine wrong skill remains a routing failure"
+
+
+def test_pocket_listing_respects_name_only_descriptions():
+    original = rc.sa.build_report
+    rc.sa.build_report = lambda args: {"skills": [
+        {"name": "name-only", "description": "hidden", "library": "local",
+         "states": {"claude": "POCKET"}, "listing_descriptions": {"claude": ""}},
+        {"name": "disabled", "description": "hidden", "library": "local",
+         "states": {"claude": "DISABLED"}, "listing_descriptions": {"claude": "hidden"}},
+    ]}
+    try:
+        args = argparse.Namespace(repo=[], config=None, tool=["claude"])
+        assert rc.pocket_listing(args) == [("name-only", "")]
+    finally:
+        rc.sa.build_report = original
 
 
 def test_repeat_below_one_is_rejected_at_parse_time():

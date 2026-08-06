@@ -1,7 +1,8 @@
 # The kiddo handbook: choosing an AI skill
 
 This book is for choosing the right helper without needing to memorize computer
-words. It covers the **27 personal shared skills** in the current library.
+words. It covers **21 canonical personal skills plus six locally installed
+GitNexus helpers** in the current library.
 Bundled robot-app skills are not listed here because they belong to the app,
 not to this personal skill shelf.
 
@@ -43,8 +44,8 @@ if you want to be extra clear.
 | `startday` | A morning brief or help seeing today clearly. | “Start my day. What is on my agenda?” |
 | `session-handoff` | A neat note for the next person—or tomorrow-you—when a work session ends. | “Use `session-handoff` and tell future me where we stopped.” |
 | `past-chat-archaeologist` | A decision, plan, or thing made in an earlier chat. | “Find what we decided about the launch plan last time.” |
-| `idea-pressure-tester` | A tough-but-fair score for a new idea. | “Pressure-test my idea for a homework-planning app.” |
-| `new-project-kickstart` | The first building blocks for a brand-new creative project. | “Help me kick off a spooky comic project.” |
+| `idea-pressure-tester` | A tough-but-fair score before deciding to build an idea. | “Pressure-test my homework-planning app idea before I commit.” |
+| `new-project-kickstart` | The first building blocks after deciding to make a creative project. | “I’m making the spooky comic; help me kick off the project.” |
 | `gitnexus-cli` | A command for working with a GitNexus code map. | “Use `gitnexus-cli` to inspect this project’s graph.” |
 | `gitnexus-debugging` | Finding why code is broken. | “This button is broken. Help me trace the bug.” |
 | `gitnexus-exploring` | Learning how unfamiliar code fits together. | “Show me how this app works before we touch it.” |
@@ -154,8 +155,11 @@ You are about to run a command that might change lots of files.
 
 - A skill is helpful advice, not magic. Check important work.
 - A Pocket label means “may be considered,” not “guaranteed to run.”
-- Gemini and Antigravity say `UNKNOWN` because the librarian cannot honestly
-  tell whether those apps use backpack or shelf rules.
+- Gemini tells the librarian which books are enabled (`POCKET`) or switched off
+  (`DISABLED`), but it has no middle shelf choice. Antigravity still says
+  `UNKNOWN` because the librarian cannot read that app's backpack rule.
+- `DISABLED` means the app has switched the skill off; naming it will not work
+  until that host setting is changed.
 - If two skills sound alike, that is a reason to read both, not a reason to
   delete one.
 - `skill-audit` reads and reports; it does not repair or delete your skills.

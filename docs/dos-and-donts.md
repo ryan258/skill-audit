@@ -89,23 +89,27 @@ but a sign the wiring was done twice.
 including links nested below the scan root, and including two separate links that
 happen to point at the same missing target. Two dead links are two cleanups.
 
-**Don't use `~/.gemini/antigravity/skills/` or `~/.gemini/antigravity-cli/skills/`.**
-Both are scanned and flagged `non_portable_path`. Only `~/.gemini/config/skills/`
-is confirmed across all three Antigravity flavors — and that evidence is community
-testing, not vendor documentation.
+**Do use Antigravity's documented `~/.gemini/config/skills/` global path or
+workspace `.agents/skills/`.** Backward-compatible workspace `.agent/skills/`
+also loads. The older global `~/.gemini/antigravity/skills/` and
+`~/.gemini/antigravity-cli/skills/` roots are scanned but flagged
+`non_portable_path`.
 
 ---
 
 ## Pocket vs shelf
 
-POCKET means the agent invokes it on its own, so its description sits in context
-**every session**. SHELF means explicit invocation only.
+POCKET means the agent invokes it on its own, so its effective listing metadata
+sits in context **every session**. That is normally name plus description;
+Claude's `name-only` override carries only the name. SHELF means explicit
+invocation only.
 
 **Do shelve anything you'd invoke by name anyway.** A skill you always call
 deliberately costs you context for nothing as POCKET.
 
-**Don't leave everything pocket by default.** Both budgets are small, and they
-fill faster than people expect:
+**Don't leave everything pocket by default.** The graded Claude and Codex
+budgets are small, and they fill faster than people expect. Gemini's enabled
+listing is counted too, but not graded because no published limit exists:
 
 ```
 Claude: 2259/2000 chars across 12 pocket skills (over)
@@ -126,6 +130,12 @@ Without it, the audit can only warn once you pass five pocket skills
 (`pocket_count`). With it, it names the drift in both directions:
 `intended_shelf_pocket`, `intended_pocket_shelf`, and `intended_missing` for a
 config entry with no skill on disk — a stale config or a typo, not a mistaken flag.
+When every selected tool reports an installed configured skill as `UNKNOWN`, the
+audit lists it under `intended_mode_unknown` without manufacturing a drift
+finding. A selected-tool SHELF or DISABLED state is likewise informational under
+`--tool` (`intended_selected_nonpocket`), because the pocket list's rule is
+"POCKET in any host" and an excluded host may satisfy it. The unfiltered audit
+still enforces the global decision.
 
 **Don't expect the config to govern a repo's own skills.** Project-scope skills
 are counted and listed separately, never measured against a global pocket list.
@@ -138,11 +148,21 @@ Codex's bundled `.system` skills are demoted to `notice` and tagged
 `[vendor-installed]`, so they never fail `--strict`. They still count against
 your listing budget, which is the part you *can* act on — by shelving them.
 
-**Don't set the two tools' flags to disagree.** `disable-model-invocation: true`
+**Don't set host controls to disagree accidentally.** `disable-model-invocation: true`
 for Claude and `policy.allow_implicit_invocation: false` in `agents/openai.yaml`
 for Codex are the same intent; setting one and not the other is
-`mode_disagreement`. Gemini and Antigravity have no documented flag, so they
-report `UNKNOWN` — expected, not a failure.
+`mode_disagreement`. Gemini has no
+explicit-only shelf, but `skills.disabled` makes a skill `DISABLED` and
+`skills.enabled: false` disables the feature. Antigravity remains `UNKNOWN` —
+expected, not a failure.
+
+**Do check host overrides before editing a correct skill file.** Claude Code's
+`~/.claude/settings.json` `skillOverrides` can make a skill POCKET, SHELF, or
+DISABLED regardless of frontmatter. Codex's `~/.codex/config.toml`
+`[[skills.config]] enabled = false` makes it DISABLED. Gemini union-merges
+`skills.disabled` across persistent settings layers and honors
+`skills.enabled: false`. A disabled skill cannot be fixed by changing its
+routing description.
 
 ---
 
@@ -167,7 +187,14 @@ plain scalars, quoted scalars, flow lists (`[Read, Grep]`), block lists, and
 block scalars (`|`, `>`).
 
 **Do match `name` to the directory name.** Mismatch is `name_mismatch`; the
-directory is what the tools key on.
+directory is what the tools key on. Both names must use 1–64 lowercase letters,
+digits, and single hyphens; violations are `invalid_name` errors.
+
+**Do honor the portable structural limits.** Description is capped at 1,024
+characters (`invalid_description`); `compatibility` must be a non-empty string
+of at most 500 characters (`invalid_compatibility`); and `metadata` must be an
+indented string-to-string mapping (`invalid_metadata`). The tighter 40–500
+description range remains the routing-quality target.
 
 **Don't invent frontmatter fields.** Recognized: `name`, `description`,
 `allowed-tools`, `disable-model-invocation`, `paths`, `when_to_use`, `license`,
@@ -190,7 +217,7 @@ purpose: a thin description shouldn't break a pipeline you didn't intend it to.
 
 **Don't filter on message text.** Filter on `code` — the messages are written for
 humans and will be reworded. The full list is `FINDING_CODES` at the top of
-`skill_audit.py` (28 codes).
+`skill_audit.py`; do not hard-code a count that drifts when the schema grows.
 
 **Don't read `intent_shadow` as a routing failure.** It fires when one skill's
 quoted trigger phrase is a whole-word slice of another's — a hint that the two
@@ -220,8 +247,10 @@ heuristic stops working.
 
 **Don't trust the paths indefinitely.** `PATHS_VERIFIED` prints on every run.
 Codex has already moved once (`~/.codex/skills` → `~/.agents/skills`; both are
-still scanned, because the old one still holds installs). Re-verify quarterly and
-update `GLOBAL_PATHS`.
+still scanned, because the old one still holds installs). Antigravity documents
+`~/.gemini/config/skills/` globally and `.agents/skills/` in workspaces, with
+backward support for `.agent/skills/`; its older global roots are non-portable.
+Re-verify quarterly and update `GLOBAL_PATHS`.
 
 ---
 

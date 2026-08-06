@@ -22,15 +22,21 @@ The wiki splits all your booklets into two groups:
   - The AI doesn't carry them around, so they don't clog up memory. 
   - To use them, you must **ask for them by name** (e.g., *"Hey AI, go get `grill-me` off the shelf!"*).
 
+* **Disabled Skills — 🔒 Cupboard Locked**:
+  - The app has switched the skill off. It is not on the shelf and asking by
+    name cannot use it until the host setting is changed.
+
 ## 3. 🤖 The 4 AI Friends
 - **[Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) & [Codex](https://openai.com)**: Very clear about which books are in their pocket vs. on their shelf.
-- **[Gemini CLI](https://gemini.google.com) & [Antigravity](https://antigravity.google)**: They can read all the books, but they don't publicly announce if a book is in their pocket or on their shelf (so their status is marked **`UNKNOWN`**).
+- **[Gemini CLI](https://gemini.google.com)**: It publishes an enabled/disabled switch, so the audit can call a book **Pocket** or **Disabled**. It has no middle Shelf switch.
+- **[Antigravity](https://antigravity.google)**: It can read the books but does not expose a readable backpack/shelf switch, so its status is **`UNKNOWN`**.
 
 ## 4. 📋 The Master Inventory List
 It lists every single booklet on your machine (like `gitnexus-cli`, `startday`, `grill-me`, `pkos-ingest`), showing:
 - Where the master copy lives.
 - When to use it.
-- Whether it lives in the **Pocket (P)** or on the **Shelf (S)**.
+- Whether it lives in the **Pocket (P)**, on the **Shelf (S)**, is
+  **Disabled**, or has an honestly **Unknown** mode.
 
 ---
 

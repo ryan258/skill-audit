@@ -40,6 +40,15 @@ def test_parses_all_five_yaml_forms():
     assert "\n" in data["when_to_use"], "literal block keeps newlines"
 
 
+def test_portable_metadata_mapping_is_parsed_as_strings():
+    text = ('---\nname: portable-skill\n'
+            'description: "Reviews a portable skill. Use when the user asks for validation."\n'
+            'metadata:\n  author: Ryan\n  version: "1"\n---\nbody\n')
+    data, bad, ok = sa.parse_frontmatter(text)
+    assert ok and not bad, bad
+    assert data["metadata"] == {"author": "Ryan", "version": "1"}, data["metadata"]
+
+
 def test_multiline_plain_scalar_is_folded_not_truncated():
     """A wrapped description must survive whole; truncation poisons every check."""
     text = ("---\nname: grill-me\n"
@@ -127,17 +136,33 @@ def test_overlap_demoted_when_shelved():
     assert findings[0]["severity"] == "notice"
 
 
+def test_reciprocal_named_boundary_keeps_overlap_visible_but_non_blocking():
+    findings = []
+    first = {"name": "idea-check", "real_path": "/x/idea-check",
+             "description": ("Alpha bravo charlie delta echo. Use when testing an idea. "
+                             "Do not use for project structure; hand that to project-build."),
+             "states": {"claude": "POCKET"}}
+    second = {"name": "project-build", "real_path": "/x/project-build",
+              "description": ("Alpha bravo charlie delta echo. Use when structuring a project. "
+                              "Do not use for idea testing; hand that to idea-check."),
+              "states": {"claude": "POCKET"}}
+    pairs = sa.overlap_report([first, second], {}, findings)
+    assert pairs[0]["reciprocal_boundary"] is True, pairs[0]
+    assert pairs[0]["severity"] == "notice", pairs[0]
+    assert findings[0]["severity"] == "notice", findings
+
+
 
 def test_budget_ignores_unknown_from_other_tools():
     skills = [
-        {"name": "seen", "description": "d" * 100, "states": {"claude": "POCKET", "gemini": "UNKNOWN"},
+        {"name": "seen", "description": "d" * 100, "states": {"claude": "POCKET", "antigravity": "UNKNOWN"},
          "real_path": "/x"},
-        {"name": "gemonly", "description": "d" * 100, "states": {"gemini": "UNKNOWN"}, "real_path": "/y"},
+        {"name": "ag-only", "description": "d" * 100, "states": {"antigravity": "UNKNOWN"}, "real_path": "/y"},
     ]
     budget = sa.budget_report(skills, {}, [])
     assert budget["claude"]["pocket_skills"] == 1, budget
     assert budget["claude"]["total"] == len("seen") + 100, budget
-    # Only the Gemini-only skill is truly excluded; the Claude-visible one is counted.
+    # Only the Antigravity-only skill is excluded; the Claude-visible one is counted.
     assert budget["excluded_unknown"] == 1, budget
 
 
@@ -157,12 +182,21 @@ def test_budget_is_per_tool_not_per_skill():
     assert budget["claude"]["total"] == len("mixed") + 100, budget
 
 
+def test_gemini_budget_is_counted_without_an_invented_limit():
+    skill = {"name": "gem", "description": "d" * 100, "real_path": "/g",
+             "states": {"gemini": "POCKET"}}
+    budget = sa.budget_report([skill], {}, [])
+    assert budget["gemini"]["total"] == len("gem") + 100, budget
+    assert budget["gemini"]["pocket_skills"] == 1, budget
+    assert budget["gemini"]["limit"] is None and budget["gemini"]["status"] == "not measured"
+
+
 def test_collision_winner_prefers_documented_tier():
     group = [
         {"name": "dup", "real_path": "/home/dup", "scopes": ["global"],
-         "precedence_keys": ["claude:global", "agents:global"], "tools": ["claude", "gemini"]},
+         "precedence_keys": ["claude:global", "agents:global"], "tools": ["claude", "gemini", "codex"]},
         {"name": "dup", "real_path": "/repo/dup", "scopes": ["project"],
-         "precedence_keys": ["claude:project", "agents:project"], "tools": ["claude", "gemini"]},
+         "precedence_keys": ["claude:project", "agents:project"], "tools": ["claude", "gemini", "codex"]},
     ]
     claude = sa.collision_winner("claude", group)
     # Verified against code.claude.com/docs/en/skills: "enterprise overrides
@@ -173,6 +207,33 @@ def test_collision_winner_prefers_documented_tier():
     assert gemini["winner"] == "/repo/dup", gemini   # workspace beats user
     codex = sa.collision_winner("codex", group)
     assert codex["winner"] is None and len(codex["tied"]) == 2, codex
+
+
+def test_disabled_collision_copy_does_not_compete_or_win():
+    group = [
+        {"name": "dup", "real_path": "/disabled", "precedence_keys": ["claude:global"],
+         "tools": ["claude", "codex"], "states": {"claude": "DISABLED", "codex": "DISABLED"}},
+        {"name": "dup", "real_path": "/active", "precedence_keys": ["claude:project"],
+         "tools": ["claude", "codex"], "states": {"claude": "POCKET", "codex": "POCKET"}},
+    ]
+    assert sa.collision_winner("claude", group)["winner"] == "/active"
+    codex = sa.collision_winner("codex", group)
+    assert codex["winner"] == "/active" and codex["tier"] == "only enabled copy", codex
+
+
+def test_collision_with_no_host_exposing_both_is_non_blocking_evidence():
+    group = [
+        {"name": "dup", "real_path": "/disabled", "scopes": ["global"],
+         "precedence_keys": ["claude:global"], "tools": ["claude"],
+         "states": {"claude": "DISABLED"}, "library": "local"},
+        {"name": "dup", "real_path": "/active", "scopes": ["project"],
+         "precedence_keys": ["claude:project"], "tools": ["claude"],
+         "states": {"claude": "POCKET"}, "library": "local"},
+    ]
+    findings = []
+    collisions = sa.collision_report(group, findings)
+    assert collisions[0]["active_tools"] == [], collisions[0]
+    assert findings[0]["severity"] == "notice", findings
 
 
 def test_gemini_agents_path_beats_gemini_path_within_a_tier():
@@ -255,6 +316,7 @@ def test_findings_name_the_skill_when_there_is_no_path():
               "skills": [], "collisions": [], "overlaps": [],
               "budget": {"claude": {"total": 0, "limit": 1, "status": "pass", "pocket_skills": 0},
                          "codex": {"total": 0, "limit": 1, "status": "pass", "pocket_skills": 0},
+                         "gemini": {"total": 0, "limit": None, "status": "not measured", "pocket_skills": 0},
                          sa.DESKTOP: {"total": 0, "limit": None, "status": "not measured", "pocket_skills": 0},
                          "excluded_unknown": 0},
               "pocket_check": {"rule": "r", "pocket_count": 0, "correct": [],
@@ -412,7 +474,7 @@ def run(tmp: Path, **overrides) -> dict:
     """Build a report against tmp only — never the real home directory."""
     args = argparse.Namespace(repo=[str(tmp / "repo")], config=str(tmp / "missing.toml"),
                               json=False, markdown=None, quiet=False, tool=["claude"],
-                              strict=False, version=False)
+                              strict=False, version=False, home=str(tmp))
     for key, value in overrides.items():
         setattr(args, key, value)
     real_globals, real_antigravity = sa.GLOBAL_PATHS, sa.ANTIGRAVITY_NON_PORTABLE
@@ -536,6 +598,279 @@ def test_github_format_emits_escaped_annotations():
         shutil.rmtree(tmp)
 
 
+def test_portable_frontmatter_limits_are_structural_errors():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        root = tmp / "global/claude"
+        write_skill(root, "Bad_Name",
+                    '---\nname: Bad_Name\ndescription: "Reviews a skill. Use when the user asks."\n---\nbody\n')
+        write_skill(root, "long-description",
+                    '---\nname: long-description\ndescription: "%s"\n---\nbody\n'
+                    % ("Use when the user asks for validation. " + "x" * 1024))
+        write_skill(root, "bad-compatibility",
+                    '---\nname: bad-compatibility\n'
+                    'description: "Reviews a skill. Use when the user asks."\n'
+                    'compatibility: [%s]\n---\nbody\n' % ("x" * 501))
+        write_skill(root, "bad-metadata",
+                    '---\nname: bad-metadata\n'
+                    'description: "Reviews a skill. Use when the user asks."\n'
+                    'metadata: [one, two]\n---\nbody\n')
+        report = run(tmp)
+        errors = {(item["skill"], item["code"]) for item in report["findings"]
+                  if item["severity"] == "error"}
+        assert ("Bad_Name", "invalid_name") in errors, errors
+        assert ("long-description", "invalid_description") in errors, errors
+        assert ("bad-compatibility", "invalid_compatibility") in errors, errors
+        assert ("bad-metadata", "invalid_metadata") in errors, errors
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_codex_enabled_false_disables_the_configured_skill_on_python39_fallback():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        root = tmp / "global/codex"
+        disabled = write_skill(root, "codex-off",
+                               '---\nname: codex-off\n'
+                               'description: "Reviews a skill. Use when the user asks."\n---\nbody\n')
+        enabled = write_skill(root, "codex-on",
+                              '---\nname: codex-on\n'
+                              'description: "Reviews a skill. Use when the user asks."\n---\nbody\n')
+        (tmp / ".codex").mkdir()
+        (tmp / ".codex/config.toml").write_text(
+            'model = "gpt"\n\n[[skills.config]]\npath = "%s"\nenabled = false\n\n'
+            '[[skills.config]]\npath = "%s"\nenabled = true\n'
+            % (disabled / "SKILL.md", enabled / "SKILL.md"), encoding="utf-8")
+        audit_config = tmp / "audit.toml"
+        audit_config.write_text('[pocket]\nskills = ["codex-off", "codex-on"]\n', encoding="utf-8")
+        report = run(tmp, tool=None, config=str(audit_config))
+        states = {skill["name"]: skill["states"]["codex"] for skill in report["skills"]}
+        assert states == {"codex-off": "DISABLED", "codex-on": "POCKET"}, states
+        off = next(skill for skill in report["skills"] if skill["name"] == "codex-off")
+        assert off["host_overrides"]["codex"] == "disabled", off
+        assert report["pocket_check"]["pocket_count"] == 1, report["pocket_check"]
+        assert report["pocket_check"]["intended_pocket_but_shelf"] == ["codex-off"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_codex_disabled_path_matches_through_a_tool_symlink():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        canonical = write_skill(tmp / "canonical", "linked-off",
+                                '---\nname: linked-off\n'
+                                'description: "Reviews a skill. Use when the user asks."\n---\nbody\n')
+        tool_root = tmp / "global/codex"
+        tool_root.mkdir(parents=True)
+        (tool_root / "linked-off").symlink_to(canonical, target_is_directory=True)
+        (tmp / ".codex").mkdir()
+        (tmp / ".codex/config.toml").write_text(
+            '[[skills.config]]\npath = "%s"\nenabled = false\n'
+            % (tool_root / "linked-off/SKILL.md"), encoding="utf-8")
+        report = run(tmp, tool=["codex"])
+        assert report["skills"][0]["real_path"] == str(canonical.resolve())
+        assert report["skills"][0]["states"]["codex"] == "DISABLED", report["skills"][0]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_codex_wrong_skills_config_shape_is_reported_once_and_fails_soft():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        write_skill(tmp / "global/codex", "codex-skill",
+                    '---\nname: codex-skill\n'
+                    'description: "Reviews a skill. Use when the user asks."\n---\nbody\n')
+        (tmp / ".codex").mkdir()
+        (tmp / ".codex/config.toml").write_text(
+            '[skills]\nconfig = "not-an-array"\n', encoding="utf-8")
+        report = run(tmp, tool=["codex"])
+        errors = [item for item in report["findings"] if item["code"] == "config_error"]
+        assert len(errors) == 1 and "array of tables" in errors[0]["message"], errors
+        assert report["skills"][0]["states"]["codex"] == "UNKNOWN", report["skills"][0]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_claude_skill_overrides_replace_frontmatter_visibility():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        root = tmp / "global/claude"
+        body = ('---\nname: %s\ndescription: "Reviews a skill. Use when the user asks."\n'
+                'disable-model-invocation: true\n---\nbody\n')
+        for name in ("forced-on", "name-only", "menu-only", "claude-off"):
+            write_skill(root, name, body % name)
+        (tmp / ".claude").mkdir()
+        (tmp / ".claude/settings.json").write_text(json.dumps({"skillOverrides": {
+            "forced-on": "on", "name-only": "name-only",
+            "menu-only": "user-invocable-only", "claude-off": "off"}}), encoding="utf-8")
+        report = run(tmp, tool=["claude"])
+        by_name = {skill["name"]: skill for skill in report["skills"]}
+        states = {name: skill["states"]["claude"] for name, skill in by_name.items()}
+        assert states == {"claude-off": "DISABLED", "forced-on": "POCKET",
+                          "menu-only": "SHELF", "name-only": "POCKET"}, states
+        assert by_name["name-only"]["listing_descriptions"]["claude"] == ""
+        assert report["budget"]["claude"]["total"] == (
+            len("forced-on") + len(by_name["forced-on"]["description"]) + len("name-only"))
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_gemini_persistent_settings_make_enabled_state_readable_and_union_disabled_names():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        body = '---\nname: %s\ndescription: "Reviews a skill. Use when the user asks."\n---\nbody\n'
+        for name in ("user-off", "workspace-off", "still-on"):
+            write_skill(tmp / "global/gemini", name, body % name)
+        (tmp / ".gemini").mkdir()
+        (tmp / ".gemini/settings.json").write_text(
+            json.dumps({"skills": {"disabled": ["user-off"]}}), encoding="utf-8")
+        (tmp / "repo/.gemini").mkdir()
+        (tmp / "repo/.gemini/settings.json").write_text(
+            json.dumps({"skills": {"disabled": ["workspace-off"]}}), encoding="utf-8")
+        report = run(tmp, tool=["gemini"])
+        by_name = {skill["name"]: skill for skill in report["skills"]}
+        assert {name: skill["states"]["gemini"] for name, skill in by_name.items()} == {
+            "still-on": "POCKET", "user-off": "DISABLED", "workspace-off": "DISABLED"}
+        assert by_name["user-off"]["host_overrides"]["gemini"] == "disabled"
+        assert report["budget"]["gemini"]["pocket_skills"] == 1, report["budget"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_gemini_skills_enabled_false_disables_every_visible_skill():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        write_skill(tmp / "global/gemini", "gem-off",
+                    '---\nname: gem-off\ndescription: "Reviews a skill. Use when the user asks."\n---\nbody\n')
+        (tmp / ".gemini").mkdir()
+        (tmp / ".gemini/settings.json").write_text(
+            json.dumps({"skills": {"enabled": False}}), encoding="utf-8")
+        skill = run(tmp, tool=["gemini"])["skills"][0]
+        assert skill["states"]["gemini"] == "DISABLED", skill
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_gemini_enabled_vs_claude_shelf_is_not_an_impossible_mode_disagreement():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        canonical = write_skill(tmp / "canonical", "shared",
+                                '---\nname: shared\n'
+                                'description: "Reviews a skill. Use when the user asks."\n'
+                                'disable-model-invocation: true\n---\nbody\n')
+        for tool in ("claude", "gemini"):
+            root = tmp / "global" / tool
+            root.mkdir(parents=True)
+            (root / "shared").symlink_to(canonical, target_is_directory=True)
+        report = run(tmp, tool=["claude", "gemini"])
+        assert report["skills"][0]["states"] == {
+            "claude": "SHELF", "gemini": "POCKET"}, report["skills"][0]
+        assert not any(item["code"] == "mode_disagreement" for item in report["findings"])
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_malformed_host_override_files_fail_soft_with_config_findings():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        body = '---\nname: %s\ndescription: "Reviews a skill. Use when the user asks."\n---\nbody\n'
+        write_skill(tmp / "global/claude", "claude-skill", body % "claude-skill")
+        codex_skill = write_skill(tmp / "global/codex", "codex-skill", body % "codex-skill")
+        write_skill(tmp / "global/gemini", "gemini-skill", body % "gemini-skill")
+        (tmp / ".claude").mkdir()
+        (tmp / ".claude/settings.json").write_text("{not-json", encoding="utf-8")
+        (tmp / ".codex").mkdir()
+        (tmp / ".codex/config.toml").write_text(
+            '[[skills.config]]\npath = "%s"\nenabled = "not-a-boolean"\n'
+            % (codex_skill / "SKILL.md"), encoding="utf-8")
+        (tmp / ".gemini").mkdir()
+        (tmp / ".gemini/settings.json").write_text(
+            json.dumps({"skills": {"disabled": "not-a-list"}}), encoding="utf-8")
+        report = run(tmp, tool=["claude", "codex", "gemini"])
+        host_errors = [item for item in report["findings"] if item["code"] == "config_error"]
+        assert len(host_errors) == 3, host_errors
+        assert {skill["name"] for skill in report["skills"]} == {
+            "claude-skill", "codex-skill", "gemini-skill"}
+        assert {skill["name"]: next(iter(skill["states"].values()))
+                for skill in report["skills"]} == {
+                    "claude-skill": "UNKNOWN",
+                    "codex-skill": "UNKNOWN",
+                    "gemini-skill": "UNKNOWN",
+                }, report["skills"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_unknown_only_selected_tool_is_not_reported_as_shelf_drift():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        write_skill(tmp / "global/antigravity", "wanted",
+                    '---\nname: wanted\ndescription: "Reviews a skill. Use when the user asks."\n---\nbody\n')
+        config = tmp / "audit.toml"
+        config.write_text('[pocket]\nskills = ["wanted", "installed-elsewhere"]\n\n'
+                          '[overlap]\nsuppress = ["also / elsewhere"]\n', encoding="utf-8")
+        report = run(tmp, tool=["antigravity"], config=str(config))
+        pocket = report["pocket_check"]
+        assert pocket["intended_mode_unknown"] == ["wanted"], pocket
+        assert pocket["intended_not_visible"] == ["installed-elsewhere"], pocket
+        assert pocket["intended_but_not_installed"] == [], pocket
+        assert pocket["intended_pocket_but_shelf"] == [], pocket
+        assert not any(item["code"] == "intended_pocket_shelf" for item in report["findings"])
+        assert not any(item["code"] in ("intended_missing", "suppress_unmatched")
+                       for item in report["findings"]), report["findings"]
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_filtered_nonpocket_state_is_informational_when_an_excluded_host_may_satisfy_intent():
+    findings = []
+    skills = [{"name": "wanted", "library": "local", "scopes": ["global"],
+               "states": {"claude": "SHELF"}}]
+    result = sa.pocket_report(skills, {"pocket": {"skills": ["wanted"]}}, findings,
+                              filtered=True)
+    assert result["intended_selected_nonpocket"] == ["wanted"], result
+    assert result["intended_pocket_but_shelf"] == [], result
+    assert not findings, findings
+
+
+def test_unfiltered_pocket_check_still_reports_truly_missing_config_names():
+    findings = []
+    result = sa.pocket_report([], {"pocket": {"skills": ["gone"]}}, findings)
+    assert result["intended_but_not_installed"] == ["gone"], result
+    assert result["intended_not_visible"] == [], result
+    assert [item["code"] for item in findings] == ["intended_missing"], findings
+
+
+def test_antigravity_discovers_documented_and_legacy_workspace_roots():
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        write_skill(tmp / "repo/.agents/skills", "documented",
+                    '---\nname: documented\ndescription: "Reviews a skill. Use when the user asks."\n---\nbody\n')
+        write_skill(tmp / "repo/.agent/skills", "legacy",
+                    '---\nname: legacy\ndescription: "Reviews a skill. Use when the user asks."\n---\nbody\n')
+        report = run(tmp, tool=["antigravity"])
+        assert {skill["name"] for skill in report["skills"]} == {"documented", "legacy"}
+        assert all(skill["states"]["antigravity"] == "UNKNOWN" for skill in report["skills"])
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_antigravity_global_path_matches_current_vendor_documentation():
+    assert sa.GLOBAL_PATHS["antigravity"] == ("~/.gemini/config/skills",)
+    assert "~/.gemini/antigravity/skills" in sa.ANTIGRAVITY_NON_PORTABLE
+    assert "~/.gemini/antigravity-cli/skills" in sa.ANTIGRAVITY_NON_PORTABLE
+
+
 def test_desktop_invocation_mode_comes_from_the_manifest():
     """Desktop's 'enabled' is its disable-model-invocation; guessing is not allowed."""
     tmp = Path(tempfile.mkdtemp())
@@ -625,13 +960,39 @@ def test_vendor_skill_quality_findings_are_demoted_to_notice():
         shutil.rmtree(tmp)
 
 
+def test_vendor_name_does_not_demote_a_same_named_local_overlap():
+    """Vendor provenance belongs to an occurrence, never to a global name."""
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        (tmp / "repo").mkdir()
+        shared = ('---\nname: %s\n'
+                  'description: "Alpha bravo charlie delta echo foxtrot. Use when the user asks."\n'
+                  '---\nbody\n')
+        for name in ("idea-one", "idea-two"):
+            write_skill(tmp / "global/claude", name, shared % name)
+            write_skill(tmp / "global/claude-desktop", name, shared % name)
+        report = run(tmp, tool=["claude", "claude-desktop"])
+        local_pair = next(item for item in report["overlaps"]
+                          if set(item["skills"]) == {"idea-one", "idea-two"}
+                          and not item["vendor_installed"])
+        assert local_pair["severity"] == "warning", local_pair
+        local_findings = [item for item in report["findings"]
+                          if item["code"] == "overlap"
+                          and item["skill"] == "idea-one / idea-two"
+                          and not item.get("vendor_installed")]
+        assert local_findings and local_findings[0]["severity"] == "warning", local_findings
+        assert "[vendor-installed]" not in local_findings[0]["message"]
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_vendor_unparseable_frontmatter_is_demoted_too():
-    """Codex ships skill-creator with a `metadata:` block this parser cannot read."""
+    """A vendor's unsupported nested field is still outside the user's control."""
     tmp = Path(tempfile.mkdtemp())
     try:
         (tmp / "repo").mkdir()
         broken = ('---\nname: %s\ndescription: "Does a thing. Use when the user asks."\n'
-                  'metadata:\n  version: 1\n---\nbody\n')
+                  'custom:\n  version: 1\n---\nbody\n')
         write_skill(tmp / "global/codex/.system", "vendor-broken", broken % "vendor-broken")
         write_skill(tmp / "global/codex", "mine-broken", broken % "mine-broken")
         report = run(tmp, tool=["codex"])

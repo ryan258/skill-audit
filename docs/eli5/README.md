@@ -51,7 +51,7 @@ shared robot shelves lead through Claude’s shelf too:
         ↑
 ~/.agents/skills/           a shortcut to Claude's shelf
         ↑
-~/.gemini/config/skills/    another shortcut in the chain
+~/.gemini/config/skills/       Antigravity's documented global shelf
 ```
 
 This is useful because you change one real booklet instead of trying to repair
@@ -70,12 +70,16 @@ open all day.
 
 | Name in the report | Kid version | What it means |
 |---|---|---|
-| **POCKET** | In the backpack | The robot may notice and use this skill by itself. Its short description is carried into every chat. |
+| **POCKET** | In the backpack | The robot may notice and use this skill by itself. Its label is carried into every chat—usually name plus description, or only the name when Claude is set to `name-only`. |
 | **SHELF** | On the bookshelf | The robot waits for you to name the skill or clearly ask for its special job. |
 | **UNKNOWN** | We cannot see inside this backpack | The robot’s app does not give the librarian a trustworthy way to tell whether the skill is automatic or explicit-only. |
+| **DISABLED** | The cupboard is locked | The robot app has switched this skill off, so it cannot use it until someone turns it back on. |
 
 Pocket skills are handy, but too many make the backpack heavy. Shelf skills are
-still real and useful—they simply wait until you ask for them.
+still real and useful—they simply wait until you ask for them. A disabled skill
+is different: asking by name will not work until the app turns it back on.
+Gemini tells the audit whether a book is enabled or disabled, but it has no
+middle “shelf” choice. Antigravity still keeps that part of its backpack hidden.
 
 For example, a daily helper such as `startday` may make sense in a backpack.
 A very special helper such as `grill-me` can stay on the shelf until you say,

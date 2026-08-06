@@ -13,7 +13,7 @@ them separate makes the rest of the documentation easier to use.
                                   |                              |
                                   | each tool applies its own collision rules
                                   v                              v
-3. Invocation mode       POCKET, SHELF, or UNKNOWN for that tool
+3. Invocation state      POCKET, SHELF, UNKNOWN, or DISABLED for that tool
 ```
 
 Those are **two libraries**, and the left one does not feed the right one.
@@ -60,6 +60,9 @@ Discovery answers “can this tool see the skill?” Collision resolution answer
 | Antigravity | The audit reports discovered paths but cannot establish a complete vendor precedence model. | Treat collisions as needing manual review. |
 | Claude Desktop | A separate account-synced library; names are unique server-side, so no cross-copy precedence applies. | Not applicable — it never competes with the local library. |
 
+A copy marked `DISABLED` does not compete or win for that host. It remains in
+the collision evidence because another host or workspace may still enable it.
+
 The detailed per-tool commands and path caveats are in
 [skill-setup.md](../skill-setup.md). The audit's exact discovery and precedence
 behavior is in [living-manual.md](living-manual.md).
@@ -71,17 +74,23 @@ for an explicit request:
 
 | Mode | Meaning | Operational choice |
 |---|---|---|
-| **POCKET** | The tool may invoke the skill on its own; its description consumes every-session context. | Reserve for a small number of broadly useful skills the agent must notice. |
+| **POCKET** | The tool may invoke the skill on its own; its listing metadata consumes every-session context (normally name plus description, or name only under Claude's `name-only` override). | Reserve for a small number of broadly useful skills the agent must notice. |
 | **SHELF** | The tool waits for the user to name the skill or clearly request its specialized job. | Use for deliberate, narrow, or infrequent workflows. |
-| **UNKNOWN** | The tool exposes no documented shelf signal. | Do not infer a mode or include it in known-mode budget math. |
+| **UNKNOWN** | The audit has no readable, valid signal for that tool/context. | Do not infer a mode or include it in known-mode budget math. |
+| **DISABLED** | The host explicitly hides or disables the skill, so it cannot be invoked there. | Re-enable it in the host before judging routing or budget. |
 
-Claude and Codex can assign POCKET or SHELF per skill, via
-`disable-model-invocation` and `policy.allow_implicit_invocation`. Claude Desktop
-has its own equivalent, the `enabled` flag in the cache's `manifest.json`, which
-the audit reads rather than assumes; a skill missing from that manifest is
-UNKNOWN. Gemini and Antigravity remain UNKNOWN because their documented
-interfaces do not expose the distinction. Desktop's listing size is reported but
-not graded: no published budget exists for it.
+Claude and Codex can assign POCKET or SHELF per skill through
+`disable-model-invocation` and `policy.allow_implicit_invocation`. Host settings
+then take precedence: Claude Code's `skillOverrides` can force `on`, `name-only`,
+`user-invocable-only`, or `off`; Codex's `[[skills.config]] enabled = false`
+produces DISABLED. Gemini has no SHELF state, but persistent `skills.enabled`
+and union-merged `skills.disabled` settings make enabled skills POCKET and
+disabled skills DISABLED. A Claude `name-only` entry is POCKET but contributes
+only its name to listing-budget math. Claude Desktop has its own equivalent, the
+`enabled` flag in the cache's `manifest.json`, which the audit reads rather than
+assumes; a skill missing from that manifest is UNKNOWN. Antigravity remains
+UNKNOWN because it exposes no readable per-skill state. Gemini and Desktop
+listing sizes are reported but not graded: neither has a published budget.
 
 ## Where to go next
 

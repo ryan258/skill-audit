@@ -1,6 +1,6 @@
-# The three trigger phrases ported from the Desktop copy — the reason for the port.
-# All three route 3/3 against sonnet; the previous 92-char description carried none
-# of them.
+# Positive and adjacent cases for the accepted-project versus go/no-go boundary.
+# These expectations describe the current reciprocal handoff; run route_check.py
+# in a fresh model session to measure them rather than treating this file as proof.
 #
 # Boundary case, measured but not asserted:
 #   "Update the production bible for KVOID, it already exists" -> NONE
@@ -8,6 +8,8 @@
 # skill owns the production-bible format, so firing on existing-project work is
 # arguable rather than plainly wrong — recorded here rather than parked as a
 # permanently red case. Tighten the description toward "new" if you want it clean.
-{"query": "I have an idea for a new show", "expected": "new-project-kickstart"}
-{"query": "new project", "expected": "new-project-kickstart"}
-{"query": "help me build this out", "expected": "new-project-kickstart"}
+{"query": "I've decided to make a new show. Help me structure the project.", "expected": "new-project-kickstart"}
+{"query": "Let's start a new project; I've committed to it and need the premise and production bible.", "expected": "new-project-kickstart"}
+{"query": "Help me build this accepted concept out into a production-ready project.", "expected": "new-project-kickstart"}
+{"query": "I have an idea for a new show. Is it worth building?", "expected": "idea-pressure-tester"}
+{"query": "Score this project concept honestly before I commit.", "expected": "idea-pressure-tester"}

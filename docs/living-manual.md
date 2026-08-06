@@ -3,7 +3,7 @@
 New to this library? Start with [The skill-library model](library-model.md) for
 the orientation; this manual is the detailed audit and operations reference.
 
-> **Implementation status:** this manual describes version 1.1.0 of
+> **Implementation status:** this manual describes version 1.2.0 of
 > `skill_audit.py`, as it exists in this repository. It is an operational
 > reference, not a promise that a vendor will keep the same filesystem paths or
 > invocation behavior. Check `PATHS_VERIFIED` with `--version` and re-verify the
@@ -18,8 +18,8 @@ four practical questions:
 1. Which skill directories are actually discoverable from the configured
    locations?
 2. Are their descriptions and frontmatter usable as routing metadata?
-3. Which skills are auto-invocable, explicit-only, or honestly unknown for
-   each tool?
+3. Which skills are auto-invocable, explicit-only, explicitly disabled, or
+   honestly unknown for each tool?
 4. Where are duplicate names, similar descriptions, budget pressure, or drift
    from the library owner’s stated intent?
 
@@ -66,9 +66,10 @@ own terminology.
 
 | Term | Meaning | Why it matters |
 |---|---|---|
-| **POCKET** | The tool can invoke the skill without the user naming it. | Its name and description consume the tool’s always-present listing budget. |
+| **POCKET** | The tool can invoke the skill without the user naming it. | Its effective listing text consumes always-present context; Claude `name-only` is the name without the description. |
 | **SHELF** | The skill is explicit-only for that tool. | It remains available, but does not compete for automatic selection. |
-| **UNKNOWN** | The tool has no documented setting the audit can use to infer the mode. | The audit neither calls it pocket nor shelf, and does not count it in a known budget. |
+| **UNKNOWN** | The audit has no readable, valid setting it can use to infer the mode. | The audit neither calls it pocket nor shelf, and does not count it in a known budget. |
+| **DISABLED** | The host explicitly hides or disables the skill. | It is not invocable or counted in that host's listing budget. |
 | **Global** | A skill found in a user-level tool directory. | It participates in the optional global pocket-intent comparison. |
 | **Project** | A skill found directly under a selected repository’s skill directory. | It is counted and reported, but is not compared against the global pocket list. |
 | **Nested** | A skill directory found deeper inside a selected repository. | It is reported separately because its loading and precedence can differ. |
@@ -92,17 +93,16 @@ Missing locations are reported as `not present`, not errors.
 
 | Tool | Global locations scanned | Invocation state the audit can establish |
 |---|---|---|
-| Claude Code | `~/.claude/skills/` | POCKET or SHELF |
-| Codex | `~/.agents/skills/`, plus legacy `~/.codex/skills/` and system `/etc/codex/skills/` | POCKET or SHELF |
-| Gemini CLI | `~/.agents/skills/`, `~/.gemini/skills/` | UNKNOWN |
-| Antigravity | `~/.gemini/config/skills/` | UNKNOWN |
+| Claude Code | `~/.claude/skills/` | POCKET, SHELF, or DISABLED |
+| Codex | `~/.agents/skills/`, plus legacy `~/.codex/skills/` and system `/etc/codex/skills/` | POCKET, SHELF, or DISABLED |
+| Gemini CLI | `~/.agents/skills/`, `~/.gemini/skills/` | POCKET or DISABLED; UNKNOWN only when persistent settings are invalid or unreadable |
+| Antigravity | documented `~/.gemini/config/skills/` | UNKNOWN |
 | Claude Desktop | `~/Library/Application Support/Claude/local-agent-mode-sessions/skills-plugin/*/*/skills` (macOS, globbed) | POCKET or SHELF, from the cache manifest's `enabled` flag |
 
-The scanner also checks `~/.gemini/antigravity/skills/` and
-`~/.gemini/antigravity-cli/skills/`. If either contains skills, the skills are
-included but the audit emits `non_portable_path`: only the configured Antigravity
-path is treated as portable by this project, and that portability evidence is
-community testing rather than a vendor guarantee.
+The scanner also checks the older global
+`~/.gemini/antigravity/skills/` and
+`~/.gemini/antigravity-cli/skills/` roots. If either contains skills, they are
+included but the audit emits `non_portable_path`.
 
 ### Project scans
 
@@ -111,8 +111,9 @@ path, the tool considers these direct directories:
 
 ```text
 .claude/skills/   -> Claude
-.agents/skills/   -> Codex and Gemini
+.agents/skills/   -> Codex, Gemini, and Antigravity
 .gemini/skills/   -> Gemini
+.agent/skills/    -> Antigravity backward compatibility
 ```
 
 It also searches for nested copies of those directories. The recursive search
@@ -120,6 +121,12 @@ prunes `.git`, `node_modules`, virtual environments, caches, build output, and
 common package/build directories so a large repository is not needlessly walked.
 A missing `--repo` produces an `unreadable` warning and does not stop the rest
 of the scan.
+
+Passing `--repo` says "audit this workspace"; it does not prove that a host has
+trusted the folder. In particular, Gemini can skip project agents, workspace
+settings, and hooks until its own folder-trust check succeeds. The audit treats
+an explicitly supplied repository as the settings context and leaves that
+interactive trust decision to the host.
 
 ### Links, aliases, and copies
 
@@ -155,6 +162,7 @@ Supported forms are:
 - block lists;
 - literal (`|`) and folded (`>`) block scalars;
 - multi-line plain scalars, folded with spaces; and
+- a string-to-string `metadata` mapping in `SKILL.md`; and
 - one level of mappings in Codex’s `agents/openai.yaml`.
 
 Unsupported forms include anchors, aliases, tags, inline flow mappings, and
@@ -187,6 +195,13 @@ An unfamiliar but syntactically readable field is a `unknown_field` notice, not
 an error: a vendor may have added it. The audit’s important requirement is that
 the fields it relies on are readable.
 
+Portable structural validation follows the Agent Skills limits: a present name
+must use 1–64 lowercase letters, digits, and single hyphens; a description may
+not exceed 1,024 characters; `compatibility`, when present, is a non-empty
+string of at most 500 characters; and `metadata`, when present, maps strings to
+strings. Violations are errors. The tighter 40–500 description range remains an
+advisory routing-quality check inside that portable envelope.
+
 ## Description quality and routing contract
 
 The description is the skill’s routing contract. An agent can make its initial
@@ -198,12 +213,13 @@ For every usable description, the audit checks:
 | Check | Current rule | Finding if it fails |
 |---|---|---|
 | Presence | A non-empty string must be readable. | `missing_description` (error) |
-| Length | At least 40 and no more than 500 characters. | `thin_description` / `bloated_description` |
+| Portable maximum | No more than 1,024 characters. | `invalid_description` (error) |
+| Quality length | At least 40 and no more than 500 characters. | `thin_description` / `bloated_description` |
 | Trigger language | Must use one of the recognized routing patterns. | `missing_trigger` |
 | Vague-only text | After stopword removal, remaining words must not be only vague terms. | `vague_description` |
 | Early signal | The first 100 characters should contain a distinctive non-vague term. | `late_job_noun` (notice) |
 | Body size | `SKILL.md` must not exceed 500 lines. | `oversized_body` |
-| Claude entry cap | For a Claude-visible skill, `name + description` must not exceed 1,536 characters. | `entry_cap_exceeded` |
+| Claude entry cap | For a Claude POCKET entry, its effective listing name plus description must not exceed 1,536 characters. | `entry_cap_exceeded` |
 
 Recognized trigger language includes:
 
@@ -223,8 +239,8 @@ words. It does not claim to identify a literal noun.
 
 ## The two libraries
 
-The tool scans two libraries that never meet. The **local** one is the four
-filesystem cupboards (`.claude`, `.agents`, `.gemini`, `.codex`). The
+The tool scans two libraries that never meet. The **local** one is the
+filesystem cupboards (`.claude`, `.agents`, `.agent`, `.gemini`, `.codex`). The
 **claude-desktop** one is the account-synced set the desktop app caches under
 two identifiers it assigns, so its configured location contains `*` segments
 and is expanded by glob; a pattern matching nothing is still listed as *not
@@ -234,8 +250,8 @@ failure this tool exists to prevent.
 Every comparison between skills is scoped to one library. A name in both is
 one skill synced two ways, not a collision, and no documented precedence rule
 relates them because they are never offered to the same model at once. On the
-reference machine nine names appear in both libraries and produce zero
-collisions; without the scoping they would be nine false ones.
+same name can appear in both libraries and still produce zero collisions;
+without the scoping those would be false conflicts.
 
 Desktop invocation mode is read from the cache's `manifest.json` `enabled`
 flag — Desktop's equivalent of `disable-model-invocation`. A skill absent from
@@ -248,31 +264,44 @@ The same physical skill can be visible to several tools and have a different
 mode in each. The audit models mode per tool instead of assigning one mode to
 the directory.
 
-| Tool | SHELF signal | Default when visible | Notes |
+| Tool | File-local SHELF signal | Host override | Default when visible |
 |---|---|---|---|
-| Claude Code | `disable-model-invocation: true` in the skill frontmatter | POCKET | Invalid boolean values are warnings. |
-| Codex | `policy.allow_implicit_invocation: false` in `<skill>/agents/openai.yaml` | POCKET | Only this nested `policy` value controls the mode. |
-| Gemini CLI | No documented signal used here | UNKNOWN | Excluded from known invocation-mode budget math. |
-| Antigravity | No documented signal used here | UNKNOWN | Excluded from known invocation-mode budget math. |
+| Claude Code | `disable-model-invocation: true` in the skill frontmatter | `~/.claude/settings.json` `skillOverrides`: `on`, `name-only`, `user-invocable-only`, or `off` | POCKET |
+| Codex | `policy.allow_implicit_invocation: false` in `<skill>/agents/openai.yaml` | `~/.codex/config.toml` `[[skills.config]] enabled = false` | POCKET |
+| Gemini CLI | No explicit-only shelf | Persistent `skills.enabled`, `admin.skills.enabled`, and union-merged `skills.disabled` | POCKET |
+| Antigravity | No documented shelf signal used here | None modeled | UNKNOWN |
 
 Codex policy files normally do not have `---` delimiters. The parser supports
 them as a synthetic frontmatter block and handles sibling mappings such as
 `interface:` and `policy:`. A sibling mapping does not alter invocation mode;
 only `policy.allow_implicit_invocation` does.
 
+Host settings take precedence over file-local routing metadata. Claude maps
+`off` to DISABLED, `user-invocable-only` to SHELF, and `on` or `name-only` to
+POCKET; `name-only` contributes only the name to budget math. Codex
+`enabled = false` maps to DISABLED. Gemini reads persistent system defaults,
+user settings, the explicitly audited workspace settings, and the system
+override in vendor precedence order; disabled-name arrays union across layers.
+A malformed layer emits `config_error` and yields UNKNOWN instead of a guess.
+DISABLED is not treated as a POCKET/SHELF mode disagreement because the host has
+removed the skill from invocation.
+
 If Claude and Codex can both see a skill and one resolves to POCKET while the
 other resolves to SHELF, the audit emits `mode_disagreement`. That is normally a
 half-finished configuration change, so it is a warning rather than silent
-metadata.
+metadata. Gemini is excluded because it exposes no SHELF choice to agree with.
 
 ## Budget model
 
-Budget calculations are separate for Claude and Codex.
+Budget calculations are separate per host. Only Claude and Codex have graded
+limits; Gemini and Claude Desktop are counted but marked not measured.
 
 | Tool | Calculation | Default limit |
 |---|---|---|
-| Claude | Sum `len(name) + len(description)` for Claude-visible POCKET skills. | 1% of context window; 2,000 characters with the default 200,000 window. |
+| Claude | Sum the effective listing text for Claude POCKET skills (`name + description`, or only `name` under `name-only`). | 1% of context window; 2,000 characters with the default 200,000 window. |
 | Codex | Sum the same values for Codex-visible POCKET skills. | 2% of context window, capped at 8,000 characters; 4,000 with the default window. |
+| Gemini | Sum `name + description` for Gemini POCKET skills. | None published; total is reported without a verdict. |
+| Claude Desktop | Sum `name + description` for manifest-enabled skills. | None published; total is reported without a verdict. |
 
 Configure another assumed context window when appropriate:
 
@@ -281,10 +310,11 @@ Configure another assumed context window when appropriate:
 context_window = 200000
 ```
 
-A skill shelved in Claude but pocket in Codex costs only Codex’s budget. A skill
-visible only to Gemini or Antigravity is counted in the inventory but excluded
-from known budget totals because its state is UNKNOWN. The report prints the
-number excluded so a low total cannot be mistaken for full coverage.
+A skill shelved in Claude but pocket in Codex or Gemini costs only the listings
+where it is pocket. A skill visible only to Antigravity is counted in the
+inventory but excluded from known totals because its state is UNKNOWN. The
+report prints the number excluded so a low total cannot be mistaken for full
+coverage.
 
 The separate **pocket check** uses a deliberately broader rule: a skill counts
 as pocket if any visible tool marks it POCKET. This can legitimately differ from
@@ -331,7 +361,10 @@ list, it compares installed global skills against intent:
 |---|---|---|
 | Correct | Listed in config and actually POCKET. | None |
 | Intended shelf but pocket | An installed global skill is POCKET but absent from the list. | `intended_shelf_pocket` |
-| Intended pocket but shelf | A listed installed skill is no longer POCKET. | `intended_pocket_shelf` |
+| Intended pocket but shelf/disabled | A listed installed skill has a known non-POCKET state. | `intended_pocket_shelf` |
+| Installed, mode unknown | A listed skill exists, but every selected tool reports UNKNOWN. | Informational `intended_mode_unknown`; no finding |
+| Selected tools non-pocket | Under `--tool`, a listed skill is SHELF or DISABLED, but an excluded host may still satisfy the any-tool intent. | Informational `intended_selected_nonpocket`; no finding |
+| Not visible under `--tool` | A configured name may exist only in an excluded tool. | Informational `intended_not_visible`; no finding |
 | Intended but not installed | The list names no discovered skill. | `intended_missing` |
 
 Project and nested skills still contribute to the total pocket count, but are
@@ -354,15 +387,14 @@ library, and the skills Codex bundles under a `.system` directory in its skills
 tree. You did not author them and cannot edit them.
 
 Their findings are still produced — the audit does not hide them, because a
-vendor's description consumes exactly as much listing budget as your own, and a
+vendor's effective listing metadata consumes listing budget just like your own, and a
 budget that quietly omitted them would understate the real cost. But quality
 findings against them are demoted from `warning` to `notice` and their message
 gains a `[vendor-installed]` suffix naming the reason. A `--strict` run must
 never fail on wording you have no power to change.
 
-The demotion covers description quality, structure, overlap, intent shadowing,
-and unparseable frontmatter fields — Codex ships `skill-creator` with a nested
-`metadata:` block this parser cannot read, and no edit of yours changes that.
+The demotion covers description quality, overlap, intent shadowing, unknown
+fields, and unparseable frontmatter fields.
 Overlap *pairs* are demoted alongside the matching finding when both skills are
 vendor-installed, so a consumer filtering on `overlaps[].severity` cannot
 disagree with the findings list about the same pair. A pair with one vendor
@@ -379,6 +411,9 @@ A collision is not the same thing as a symlink alias. It means two distinct real
 paths share a skill name. The report lists every occurrence and tries to explain
 the result separately for each tool.
 
+An occurrence that host marks `DISABLED` does not compete or win for that host.
+It remains in the collision evidence because another tool may still enable it.
+
 | Tool | Precedence represented by the audit | Result when unresolved |
 |---|---|---|
 | Claude | `enterprise > personal > project`; enterprise is not filesystem-visible to this audit. | Equal project/nested paths are reported as an undeterminable tie. |
@@ -388,7 +423,7 @@ the result separately for each tool.
 The Claude ordering is specifically skill precedence, not Claude settings
 precedence. The two are opposite in a personal-versus-project conflict. The
 Gemini within-tier `.agents` preference is treated as observed project knowledge,
-not vendor-documented behavior. Re-checked 2026-08-04 against
+not vendor-documented behavior. Re-checked 2026-08-06 against
 `docs/cli/using-agent-skills.md`: the vendor calls the two paths "aliases" and
 states no order between them, so the label stands. The supporting evidence is now
 first-party runtime output rather than community report — `gemini skills list
@@ -407,7 +442,8 @@ For every pair of discovered skills it:
 2. splits it on non-word characters;
 3. discards tokens under four characters;
 4. discards common routing stopwords such as `when`, `user`, `use`, `create`,
-   `write`, `make`, `help`, and `content`;
+   `write`, `make`, `help`, and `content`, plus equivalent personal/timing
+   boilerplate such as `Ryan says`, `before`, `after`, `start`, and `end`;
 5. deduplicates the remaining terms into one set per skill; and
 6. intersects those sets.
 
@@ -426,9 +462,11 @@ context, and this tool does not verify triggering.
 | 5+ shared distinctive terms | `WARNING`. |
 | Any identical quoted phrase | `WARNING`, regardless of word count. |
 | A quoted phrase of 2+ words wholly contained in another skill's quoted phrase | `NOTICE` (`intent_shadow`), one per phrase pair, regardless of term count. |
+| Both descriptions name the other skill and explicitly decline or hand off its job | Keep the overlap visible as `NOTICE`; the routing boundary is explicit rather than unresolved. |
 
 The report includes `shared_terms`, `shared_term_count`,
-`shared_quoted_phrases`, `shadowed_phrases`, and `suppressed` in JSON. In text it says “may overlap
+`shared_quoted_phrases`, `shadowed_phrases`, `reciprocal_boundary`, and
+`suppressed` in JSON. In text it says “may overlap
 — read both files,” never “these conflict.” When two copies have the same skill
 name, the display labels use real paths so the pair remains actionable — and a
 `suppress` entry for that pair must therefore be written with those paths,
@@ -436,8 +474,11 @@ joined by ` / `, the same separator the report prints.
 
 ### Intentional sharing versus accidental duplication
 
-The audit cannot tell those cases apart on its own, so the two configuration
-mechanisms work in opposite directions and neither guesses.
+The audit cannot understand a semantic boundary on its own. It can recognize the
+narrow mechanical case where both descriptions name the other skill and
+explicitly decline or hand off that adjacent job; that pair stays visible as a
+notice. Other intentional overlaps use the two configuration mechanisms below,
+which work in opposite directions and neither guesses.
 
 `ownership` only escalates: a 3–4-term notice becomes a warning when neither
 skill is the declared owner of any job area. It never silences anything.
@@ -455,6 +496,10 @@ properties keep an audited mute list from becoming an unaudited one:
 - Suppression is scoped to what you name. A pair entry mutes one pair; a bare
   skill name mutes every pair that skill appears in, including pairs formed by
   skills added later — so prefer pair entries unless you mean the wide form.
+
+An unmatched suppression is evaluated only on an unfiltered scan. Under
+`--tool`, one or both members may simply belong to an excluded host, so absence
+is not evidence that the library-wide config is stale.
 
 Suppress a pair only when you have read both files and can state the boundary in
 one sentence. Suppressing to clear a report is how the heuristic stops working.
@@ -499,6 +544,10 @@ vendor-installed skill the quality codes are demoted one level to `notice`; see
 |---|---|---|
 | `no_frontmatter` | `SKILL.md` has no leading `---` frontmatter block. | Add a valid frontmatter block. |
 | `missing_description` | Description is absent, blank, or not readable. | Add a non-empty routing description. |
+| `invalid_name` | The directory or declared name violates the portable 1–64 lowercase-hyphen form. | Rename or correct the declared name, then keep both identical. |
+| `invalid_description` | Description exceeds the portable 1,024-character maximum. | Shorten it; move procedure into the body. |
+| `invalid_compatibility` | Compatibility is not a non-empty string of at most 500 characters. | Replace it with a concise string or remove it. |
+| `invalid_metadata` | Metadata is not a string-to-string mapping. | Use an indented mapping whose keys and values are strings. |
 | `unreadable` | A required skill file cannot be read. | Repair permissions, encoding, path, or the missing repository. |
 | `unparseable_field` | A description field is malformed when it prevents a usable description. | Use supported YAML syntax; quote `: ` or ` #` values. |
 
@@ -513,12 +562,12 @@ vendor-installed skill the quality codes are demoted one level to `notice`; see
 | `oversized_body` | `SKILL.md` has more than 500 lines. |
 | `broken_symlink` | A scanned link cannot be resolved. |
 | `double_link` | Gemini’s two global roots resolve to one target. |
-| `non_portable_path` | A skill uses one of the alternate Antigravity paths. |
+| `non_portable_path` | A skill uses a legacy `~/.gemini/antigravity/skills/` or `~/.gemini/antigravity-cli/skills/` path. |
 | `mode_disagreement` | Claude and Codex disagree between POCKET and SHELF. |
 | `name_collision` | Two distinct real paths share a skill name. |
 | `overlap` | Two descriptions meet the heuristic overlap threshold. |
 | `budget_exceeded` | Claude or Codex POCKET listing total exceeds its limit. |
-| `entry_cap_exceeded` | A Claude-visible `name + description` exceeds 1,536 characters. |
+| `entry_cap_exceeded` | A Claude POCKET entry's effective listing text exceeds 1,536 characters. |
 | `pocket_count` | More than five skills are pocket and no intent list is configured. |
 | `intended_shelf_pocket` | Global pocket reality exceeds declared intent. |
 | `intended_pocket_shelf` | A declared pocket skill is not pocket. |
@@ -533,14 +582,14 @@ vendor-installed skill the quality codes are demoted one level to `notice`; see
 |---|---|
 | `unknown_field` | Frontmatter contains a readable field outside the current recognized list. |
 | `late_job_noun` | First 100 description characters lack a distinctive non-vague term. |
-| `overlap` | A 3–4 distinctive-term match that was not escalated. |
+| `overlap` | A non-blocking overlap candidate, including a reciprocal named handoff. |
 | `intent_shadow` | One quoted trigger phrase is a whole-word slice of another's. Never escalates: it cannot fail `--strict` on its own. |
 
 ## CLI contract
 
 | Flag | Behavior |
 |---|---|
-| `--repo PATH` | Add a repository to scan; repeat it for more repositories. |
+| `--repo PATH` | Add a repository to scan; repeat it for more repositories. Each path is treated as an audit context, not proof of host folder trust. |
 | `--config PATH` | Override `~/.skill-audit.toml`. |
 | `--json` | Write the complete report as JSON to stdout. It overrides `--quiet`. |
 | `--format github` | Emit one GitHub workflow command per finding for inline PR annotations, instead of the text report. `--json` wins over it. Never changes the exit code. |
@@ -574,7 +623,8 @@ pocket_check, recommendations
 `meta` records version, path-verification date, UTC scan timestamp, locations
 scanned, config location, and whether configuration was present. Each skill
 records its real path, source file, reachable locations, visible tools, per-tool
-states, line and character counts, description, scopes, precedence keys,
+states, effective per-tool listing descriptions, host overrides, line and
+character counts, description, scopes, precedence keys,
 references to other skills, and occurrences. The collision and overlap structures retain the evidence needed to
 review the high-level finding.
 
@@ -593,16 +643,18 @@ action item with a count, not a pile of indistinguishable lines.
 
 1. **It does not detect semantic or behavioral conflicts.** Opposite
    instructions with no shared vocabulary are invisible to the overlap check.
-2. **It does not distinguish intentional from accidental shared triggers.**
-   Shared phrases are a review signal, not an intent model.
+2. **It does not generally distinguish intentional from accidental shared
+   triggers.** A narrow reciprocal named handoff stays visible as a notice;
+   every other shared phrase remains a review signal, not an intent model.
 3. **It does not modify, merge, relink, or repair skills.** Repairs remain a
    human decision.
 4. **It does not prove a trigger fires.** That is a separate tool in this
    repository: `route_check.py` hands a real model the pocket listing and checks
    which skill comes back. It is deliberately not part of the auditor, which
    stays offline, instant, and dependency-free.
-5. **It does not guess Gemini or Antigravity invocation mode.** UNKNOWN is the
-   correct result when no documented signal exists.
+5. **It does not guess Antigravity invocation mode or malformed host state.**
+   Gemini's valid persistent on/off settings are modeled; UNKNOWN remains the
+   correct result when no readable signal exists.
 6. **It does not discover vendor-only or enterprise skills outside the scanned
    filesystem locations.** Precedence notes acknowledge this limitation.
 
@@ -634,8 +686,8 @@ For a release-quality change, verify three layers separately:
 
 ## Current library map
 
-This section is a human routing map for the library snapshot recorded on
-2026-08-03. It complements the audit: the audit detects files and metadata;
+This section is a human routing map for the library snapshot reviewed on
+2026-08-06. It complements the audit: the audit detects files and metadata;
 this map explains the intended division of labor. Update this table and
 `skill-wiki.md` when a skill is added, removed, renamed, or deliberately moved
 between POCKET and SHELF.
@@ -654,8 +706,8 @@ clear broad-use case rather than merely a convenient workflow.
 | `gitnexus-guide` | Explain how to use GitNexus itself. | It is product/tool guidance, not repository analysis. |
 | `gitnexus-impact-analysis` | Identify dependencies and risk before changing code. | It assesses consequences; use refactoring for the actual restructure. |
 | `gitnexus-refactoring` | Safely rename, extract, move, split, or otherwise restructure code. | It is change execution, not initial discovery. |
-| `idea-pressure-tester` | Score or pressure-test a new idea across its decision dimensions. | It evaluates an idea; it does not create a full project foundation. |
-| `new-project-kickstart` | Establish the foundation of a new creative project. | It starts a project; use pressure testing to challenge an existing proposition. |
+| `idea-pressure-tester` | Score or pressure-test an uncommitted idea across its decision dimensions. | It makes the go/no-go critique; accepted-project structure belongs to `new-project-kickstart`. |
+| `new-project-kickstart` | Establish the foundation of an accepted creative project. | It structures a committed concept; unresolved go/no-go critique belongs to `idea-pressure-tester`. |
 | `past-chat-archaeologist` | Retrieve a prior decision, artifact, or conversation result. | It looks backward; it does not create a new session record. |
 | `session-handoff` | Create a compact handoff at the end of a session. | It preserves the current work; use archaeology to find older work. |
 | `startday` | Produce the morning brief and orient the current day. | It is daily orientation, not generic long-horizon planning. |
@@ -689,8 +741,9 @@ skill or explicitly request its specialized job when you want the workflow.
 |---|---|---|
 | `pkos-ingest` | Preserve and normalize local files, folders, notes, generic ZIPs, and ChatGPT export ZIPs into PKOS. | Canonical location is `~/.skills/pkos-ingest`, linked through the shared path. Claude Code and Gemini activation still needs a fresh mode/listing verification. |
 
-Gemini and Antigravity remain UNKNOWN for all of these skills: UNKNOWN says the
-audit lacks a documented state signal, not that a skill cannot be used.
+Gemini reports POCKET or DISABLED from its effective persistent settings.
+Antigravity remains UNKNOWN: that says the audit lacks a readable state signal,
+not that a skill cannot be used.
 
 ## Related documents
 

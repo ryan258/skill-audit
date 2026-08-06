@@ -5,6 +5,10 @@ by hand. It is a reference for what is installed, not a claim that an agent will
 select a skill for every matching prompt — that is a routing question, and
 `route_check.py` is the tool for it.
 
+This snapshot predates the auditor's persistent Gemini enabled/disabled reader.
+Its Gemini `UNKNOWN` rows and budget totals are historical output, not the
+current contract; run the current CLI for live state.
+
 For the stable architecture behind this dated inventory, start with
 [The skill-library model](library-model.md). It separates canonical storage,
 tool discovery, and invocation mode; this page records the current library
@@ -54,10 +58,10 @@ Only POCKET skills are charged. `32` skills are pocket in at least one tool.
 
 ## Reading the entries
 
-- **POCKET** — eligible for automatic use; its description is loaded every session.
+- **POCKET** — eligible for automatic use; its effective listing metadata is loaded every session (Claude `name-only` is the name without the description).
 - **SHELF** — invoke by name or with an explicit request for its job.
-- **UNKNOWN** — Gemini and Antigravity expose no documented shelf signal. Do not
-  infer that a listed skill is automatic.
+- **UNKNOWN** — this dated run had no readable state signal. Current Gemini
+  settings resolve to POCKET or DISABLED; Antigravity remains UNKNOWN.
 - Claude Desktop's mode comes from the `enabled` flag in its cache manifest.
 
 ## Pocket skills — local library (17)
@@ -175,8 +179,9 @@ symlink wiring, and not editable from `~/.skills/`.
 
 - The audit is static: files, metadata, routing language, paths, budgets. It does
   not prove an agent triggered the right skill; `route_check.py` measures that.
-- Gemini and Antigravity do not expose a documented shelf state. `UNKNOWN` is
-  intentional and is excluded from budget math.
+- Gemini's current persistent settings resolve to POCKET or DISABLED and its
+  enabled listing is counted without a limit. Antigravity remains UNKNOWN and
+  excluded from budget math.
 - The Claude Desktop cache path is a macOS observation, not vendor documentation,
   and it is a cache the app owns. A miss means "not synced yet", never "no skills".
 - This page is a dated snapshot. Regenerate it rather than editing rows by hand.

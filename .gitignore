@@ -2,3 +2,4 @@ __pycache__
 docs/.DS_Store
 outputs/
 .DS_Store
+data/
